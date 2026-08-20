@@ -40,7 +40,19 @@ FINANCEAPP_REPO_URL=https://github.com/USUARIO/financeapp.git \
 
 El instalador solicitará los recursos del contenedor y la contraseña del rol PostgreSQL. La contraseña solo se transporta mediante archivos temporales con permisos `0600`; no se incluye en argumentos de procesos ni en el repositorio.
 
+Debian 13 usa systemd 257, por lo que el instalador habilita `nesting=1` y `keyctl=1` en el LXC no privilegiado. Proxmox advierte que `nesting` expone partes de `procfs` y `sysfs` del host al guest; por ese motivo el contenedor debe dedicarse exclusivamente a FinanceApp y no ejecutar código de terceros.
+
 Al terminar, guarda el token inicial del propietario mostrado una sola vez.
+
+Si una versión anterior del instalador alcanzó a crear el contenedor pero falló al iniciarlo por systemd 257, conserva el disco y reanuda así:
+
+```sh
+CTID=ID_EXISTENTE RESUME_EXISTING=yes \
+FINANCEAPP_REPO_URL=https://github.com/USUARIO/financeapp.git \
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/USUARIO/financeapp/main/ops/proxmox/financeapp-lxc.sh)"
+```
+
+Usa `RESUME_EXISTING=yes` únicamente con un LXC vacío creado por este instalador.
 
 ## Activar acceso privado HTTPS
 

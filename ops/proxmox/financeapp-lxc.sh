@@ -18,6 +18,7 @@ DB_NAME="${DB_NAME:-}"
 DB_USER="${DB_USER:-}"
 ENABLE_TAILSCALE="${ENABLE_TAILSCALE:-yes}"
 INSTALL_AI="${INSTALL_AI:-no}"
+RESUME_EXISTING="${RESUME_EXISTING:-no}"
 
 TEMP_FILES=()
 cleanup() {
@@ -50,7 +51,6 @@ for command in pveversion pct pveam pvesh pvesm curl openssl base64; do
   command -v "$command" >/dev/null || die "Missing required Proxmox command: $command"
 done
 [[ -n "$CTID" && "$CTID" =~ ^[0-9]+$ ]] || die "Could not determine a valid CT ID."
-[[ ! -e "/etc/pve/lxc/${CTID}.conf" ]] || die "CT ID ${CTID} already exists."
 
 echo
 echo "${APP} — Debian LXC installer"
@@ -65,7 +65,13 @@ fi
 [[ "$BRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || die "Invalid Git branch name."
 
 prompt_default CTID "Container ID" "$CTID"
-[[ "$CTID" =~ ^[0-9]+$ && ! -e "/etc/pve/lxc/${CTID}.conf" ]] || die "Container ID ${CTID} is invalid or already exists."
+[[ "$CTID" =~ ^[0-9]+$ ]] || die "Container ID ${CTID} is invalid."
+if [[ -e "/etc/pve/lxc/${CTID}.conf" && "$RESUME_EXISTING" != "yes" ]]; then
+  die "Container ID ${CTID} already exists. Set RESUME_EXISTING=yes only to resume a container created by this installer."
+fi
+if [[ ! -e "/etc/pve/lxc/${CTID}.conf" && "$RESUME_EXISTING" == "yes" ]]; then
+  die "Cannot resume because container ${CTID} does not exist."
+fi
 prompt_default CT_HOSTNAME "Hostname" "$CT_HOSTNAME"
 prompt_default CORES "CPU cores" "$CORES"
 prompt_default MEMORY "RAM in MiB" "$MEMORY"
@@ -119,38 +125,47 @@ INSTALL_AI=${INSTALL_AI}
 EOF
 chmod 600 "$CONFIG_FILE"
 
-info "Locating the latest Debian 13 container template"
-pveam update >/dev/null
-TEMPLATE_NAME="$(pveam available --section system | awk '/debian-13-standard/ {print $2}' | tail -n 1)"
-[[ -n "$TEMPLATE_NAME" ]] || die "No Debian 13 standard template is available."
-TEMPLATE_FILE="${TEMPLATE_NAME##*/}"
-if ! pveam list "$TEMPLATE_STORAGE" | awk '{print $1}' | grep -q "/${TEMPLATE_FILE}$"; then
-  pveam download "$TEMPLATE_STORAGE" "$TEMPLATE_FILE"
-fi
-TEMPLATE_VOLUME="${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE_FILE}"
+if [[ "$RESUME_EXISTING" == "yes" ]]; then
+  info "Resuming existing LXC ${CTID} and applying Debian 13 systemd features"
+  pct set "$CTID" --features nesting=1,keyctl=1 --onboot 1
+else
+  info "Locating the latest Debian 13 container template"
+  pveam update >/dev/null
+  TEMPLATE_NAME="$(pveam available --section system | awk '/debian-13-standard/ {print $2}' | tail -n 1)"
+  [[ -n "$TEMPLATE_NAME" ]] || die "No Debian 13 standard template is available."
+  TEMPLATE_FILE="${TEMPLATE_NAME##*/}"
+  if ! pveam list "$TEMPLATE_STORAGE" | awk '{print $1}' | grep -q "/${TEMPLATE_FILE}$"; then
+    pveam download "$TEMPLATE_STORAGE" "$TEMPLATE_FILE"
+  fi
+  TEMPLATE_VOLUME="${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE_FILE}"
 
-NET0="name=eth0,bridge=${BRIDGE},ip=${IP_CONFIG}"
-info "Creating unprivileged LXC ${CTID}"
-pct create "$CTID" "$TEMPLATE_VOLUME" \
-  --hostname "$CT_HOSTNAME" \
-  --cores "$CORES" \
-  --memory "$MEMORY" \
-  --swap "$SWAP" \
-  --rootfs "${ROOT_STORAGE}:${DISK}" \
-  --net0 "$NET0" \
-  --unprivileged 1 \
-  --features keyctl=1 \
-  --onboot 1 \
-  --start 0
+  NET0="name=eth0,bridge=${BRIDGE},ip=${IP_CONFIG}"
+  info "Creating unprivileged LXC ${CTID}"
+  pct create "$CTID" "$TEMPLATE_VOLUME" \
+    --hostname "$CT_HOSTNAME" \
+    --cores "$CORES" \
+    --memory "$MEMORY" \
+    --swap "$SWAP" \
+    --rootfs "${ROOT_STORAGE}:${DISK}" \
+    --net0 "$NET0" \
+    --unprivileged 1 \
+    --features nesting=1,keyctl=1 \
+    --onboot 1 \
+    --start 0
+fi
 
 if [[ "$ENABLE_TAILSCALE" == "yes" ]]; then
-  cat >>"/etc/pve/lxc/${CTID}.conf" <<'EOF'
+  if ! grep -q '^lxc\.mount\.entry: /dev/net/tun ' "/etc/pve/lxc/${CTID}.conf"; then
+    cat >>"/etc/pve/lxc/${CTID}.conf" <<'EOF'
 lxc.cgroup2.devices.allow: c 10:200 rwm
 lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file
 EOF
+  fi
 fi
 
-pct start "$CTID"
+if ! pct status "$CTID" | grep -q 'status: running'; then
+  pct start "$CTID"
+fi
 info "Waiting for network connectivity"
 for _attempt in {1..60}; do
   if pct exec "$CTID" -- getent hosts deb.debian.org >/dev/null 2>&1; then break; fi
