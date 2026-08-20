@@ -19,6 +19,7 @@ DB_USER="${DB_USER:-}"
 ENABLE_TAILSCALE="${ENABLE_TAILSCALE:-yes}"
 INSTALL_AI="${INSTALL_AI:-no}"
 RESUME_EXISTING="${RESUME_EXISTING:-no}"
+CONSOLE_AUTOLOGIN="${CONSOLE_AUTOLOGIN:-yes}"
 
 TEMP_FILES=()
 cleanup() {
@@ -122,6 +123,7 @@ prompt_required DB_USER "PostgreSQL user"
 [[ "$CORES" =~ ^[0-9]+$ && "$MEMORY" =~ ^[0-9]+$ && "$DISK" =~ ^[0-9]+$ ]] || die "CPU, RAM, and disk values must be integers."
 [[ "$DB_HOST" =~ ^[A-Za-z0-9.-]+$ && "$DB_PORT" =~ ^[0-9]+$ ]] || die "Invalid PostgreSQL host or port."
 [[ "$DB_NAME" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ && "$DB_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] || die "Invalid PostgreSQL database or user."
+[[ "$CONSOLE_AUTOLOGIN" == "yes" || "$CONSOLE_AUTOLOGIN" == "no" ]] || die "CONSOLE_AUTOLOGIN must be yes or no."
 read -r -s -p "PostgreSQL password for ${DB_USER}: " DB_PASSWORD
 echo
 [[ -n "$DB_PASSWORD" && "$DB_PASSWORD" != *$'\n'* ]] || die "A non-empty single-line database password is required."
@@ -159,6 +161,7 @@ MASTER_TOKEN=${MASTER_TOKEN}
 DOCUMENT_KEY_B64=${DOCUMENT_KEY_B64}
 ENABLE_TAILSCALE=${ENABLE_TAILSCALE}
 INSTALL_AI=${INSTALL_AI}
+CONSOLE_AUTOLOGIN=${CONSOLE_AUTOLOGIN}
 EOF
 chmod 600 "$CONFIG_FILE"
 

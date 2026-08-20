@@ -40,6 +40,13 @@ FINANCEAPP_REPO_URL=https://github.com/USUARIO/financeapp.git \
 
 El instalador solicitará los recursos del contenedor y la contraseña del rol PostgreSQL. La contraseña solo se transporta mediante archivos temporales con permisos `0600`; no se incluye en argumentos de procesos ni en el repositorio.
 
+Como no se configura una contraseña root del sistema, la consola de Proxmox
+inicia sesión automáticamente como root, igual que los Community Scripts. Esto
+solo afecta `container-getty` dentro de la consola: no habilita autenticación
+root por contraseña mediante SSH. Puede desactivarse ejecutando el instalador
+con `CONSOLE_AUTOLOGIN=no`; desde el shell del nodo, `pct enter ID` siempre
+permite entrar administrativamente sin contraseña del guest.
+
 Debian 13 usa systemd 257, por lo que el instalador habilita `nesting=1` y `keyctl=1` en el LXC no privilegiado. Proxmox advierte que `nesting` expone partes de `procfs` y `sysfs` del host al guest; por ese motivo el contenedor debe dedicarse exclusivamente a FinanceApp y no ejecutar código de terceros.
 
 El instalador selecciona exclusivamente una plantilla que coincida con la
@@ -60,7 +67,9 @@ FINANCEAPP_REPO_URL=https://github.com/USUARIO/financeapp.git \
 Usa `RESUME_EXISTING=yes` únicamente con un LXC vacío creado por este instalador.
 También puede usarse para continuar una instalación que se detuvo durante la
 instalación de paquetes: las operaciones del instalador son repetibles y
-conservan el mismo contenedor y disco.
+conservan el mismo contenedor y disco. Al reanudar, cualquier fuente APT de
+Tailscale dejada por una ejecución interrumpida se deshabilita durante el
+bootstrap y se crea de nuevo con permisos compatibles con Debian 13.
 
 Si LXC todavía no puede iniciar, el instalador imprime automáticamente la
 salida completa de `pct start --debug`, la configuración generada, la versión y
