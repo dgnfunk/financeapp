@@ -83,6 +83,11 @@ for command in pveversion pct pveam pvesh pvesm curl openssl base64; do
   command -v "$command" >/dev/null || die "Missing required Proxmox command: $command"
 done
 [[ -n "$CTID" && "$CTID" =~ ^[0-9]+$ ]] || die "Could not determine a valid CT ID."
+HOST_ARCH="$(dpkg --print-architecture 2>/dev/null || true)"
+case "$HOST_ARCH" in
+  amd64 | arm64) ;;
+  *) die "Unsupported or undetected Proxmox host architecture: ${HOST_ARCH:-unknown}." ;;
+esac
 
 echo
 echo "${APP} — Debian LXC installer"
@@ -158,13 +163,16 @@ EOF
 chmod 600 "$CONFIG_FILE"
 
 if [[ "$RESUME_EXISTING" == "yes" ]]; then
+  CT_ARCH="$(pct config "$CTID" | awk '$1 == "arch:" {print $2}')"
+  [[ "$CT_ARCH" == "$HOST_ARCH" ]] ||
+    die "Container ${CTID} is ${CT_ARCH:-unknown}, but this Proxmox host is ${HOST_ARCH}. Create a new container with a matching template; architecture cannot be repaired by resume."
   info "Resuming existing LXC ${CTID} and applying Debian 13 systemd features"
   pct set "$CTID" --features nesting=1,keyctl=1 --onboot 1
 else
-  info "Locating the latest Debian 13 container template"
+  info "Locating the latest Debian 13 ${HOST_ARCH} container template"
   pveam update >/dev/null
-  TEMPLATE_NAME="$(pveam available --section system | awk '/debian-13-standard/ {print $2}' | tail -n 1)"
-  [[ -n "$TEMPLATE_NAME" ]] || die "No Debian 13 standard template is available."
+  TEMPLATE_NAME="$(pveam available --section system | awk -v arch="$HOST_ARCH" '$2 ~ /^debian-13-standard_/ && $2 ~ ("_" arch "\\.tar\\.(zst|xz|gz)$") {print $2}' | sort -V | tail -n 1)"
+  [[ -n "$TEMPLATE_NAME" ]] || die "No Debian 13 ${HOST_ARCH} standard template is available."
   TEMPLATE_FILE="${TEMPLATE_NAME##*/}"
   if ! pveam list "$TEMPLATE_STORAGE" | awk '{print $1}' | grep -q "/${TEMPLATE_FILE}$"; then
     pveam download "$TEMPLATE_STORAGE" "$TEMPLATE_FILE"

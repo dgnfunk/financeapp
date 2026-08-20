@@ -42,6 +42,11 @@ El instalador solicitará los recursos del contenedor y la contraseña del rol P
 
 Debian 13 usa systemd 257, por lo que el instalador habilita `nesting=1` y `keyctl=1` en el LXC no privilegiado. Proxmox advierte que `nesting` expone partes de `procfs` y `sysfs` del host al guest; por ese motivo el contenedor debe dedicarse exclusivamente a FinanceApp y no ejecutar código de terceros.
 
+El instalador selecciona exclusivamente una plantilla que coincida con la
+arquitectura del nodo (`amd64` o `arm64`). También impide reanudar un contenedor
+de otra arquitectura, porque un rootfs ya extraído no se puede corregir con
+`RESUME_EXISTING=yes`.
+
 Al terminar, guarda el token inicial del propietario mostrado una sola vez.
 
 Si una versión anterior del instalador alcanzó a crear el contenedor pero falló al iniciarlo por systemd 257, conserva el disco y reanuda así:
