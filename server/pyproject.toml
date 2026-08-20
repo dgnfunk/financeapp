@@ -18,6 +18,9 @@ dependencies = [
   "webauthn>=2,<3",
 ]
 
+[tool.setuptools.packages.find]
+include = ["app", "app.*"]
+
 [project.optional-dependencies]
 dev = [
   "pytest>=9.0.3,<10",

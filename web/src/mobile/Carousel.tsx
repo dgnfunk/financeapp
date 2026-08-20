@@ -157,7 +157,11 @@ export function Carousel({
   const cross = (event: ReactPointerEvent<HTMLDivElement>) => event.clientY;
   const record = (value: number) => {
     const time = performance.now();
-    samplesRef.current = [...samplesRef.current, { value, time }].filter((sample) => time - sample.time <= physics.sampleWindow);
+    // Keep a small bounded history and choose the sample window on release.
+    // Filtering on every pointer event can leave only one sample on a busy
+    // device or CI runner, which incorrectly turns a fast swipe into zero
+    // momentum.
+    samplesRef.current = [...samplesRef.current, { value, time }].slice(-12);
   };
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -211,8 +215,11 @@ export function Carousel({
     if (!node || !session || session.pointerId !== event.pointerId) return;
     if (session.captured) event.currentTarget.releasePointerCapture(event.pointerId);
     const samples = samplesRef.current;
-    const first = samples[0];
     const last = samples[samples.length - 1];
+    const recent = last
+      ? samples.filter((sample) => last.time - sample.time <= physics.sampleWindow)
+      : [];
+    const first = recent.length >= 2 ? recent[0] : samples[samples.length - 2];
     const velocity = first && last ? -((last.value - first.value) / Math.max(1, last.time - first.time)) * physics.velocityScale : 0;
     sessionRef.current = null;
     setDragging(false);
