@@ -58,6 +58,9 @@ FINANCEAPP_REPO_URL=https://github.com/USUARIO/financeapp.git \
 ```
 
 Usa `RESUME_EXISTING=yes` únicamente con un LXC vacío creado por este instalador.
+También puede usarse para continuar una instalación que se detuvo durante la
+instalación de paquetes: las operaciones del instalador son repetibles y
+conservan el mismo contenedor y disco.
 
 Si LXC todavía no puede iniciar, el instalador imprime automáticamente la
 salida completa de `pct start --debug`, la configuración generada, la versión y

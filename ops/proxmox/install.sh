@@ -40,10 +40,17 @@ install_node() {
 install_node
 
 if [[ "${ENABLE_TAILSCALE:-yes}" == "yes" ]]; then
-  curl -fsSL https://pkgs.tailscale.com/stable/debian/trixie.noarmor.gpg \
-    -o /usr/share/keyrings/tailscale-archive-keyring.gpg
-  curl -fsSL https://pkgs.tailscale.com/stable/debian/trixie.tailscale-keyring.list \
-    -o /etc/apt/sources.list.d/tailscale.list
+  TAILSCALE_KEYRING_TMP="$(mktemp)"
+  TAILSCALE_SOURCE_TMP="$(mktemp)"
+  curl -fsSL --retry 3 https://pkgs.tailscale.com/stable/debian/trixie.noarmor.gpg \
+    -o "$TAILSCALE_KEYRING_TMP"
+  curl -fsSL --retry 3 https://pkgs.tailscale.com/stable/debian/trixie.tailscale-keyring.list \
+    -o "$TAILSCALE_SOURCE_TMP"
+  install -o root -g root -m 0644 "$TAILSCALE_KEYRING_TMP" \
+    /usr/share/keyrings/tailscale-archive-keyring.gpg
+  install -o root -g root -m 0644 "$TAILSCALE_SOURCE_TMP" \
+    /etc/apt/sources.list.d/tailscale.list
+  rm -f "$TAILSCALE_KEYRING_TMP" "$TAILSCALE_SOURCE_TMP"
   apt-get update
   apt-get install -y tailscale
 fi
