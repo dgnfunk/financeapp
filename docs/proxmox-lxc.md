@@ -54,6 +54,12 @@ FINANCEAPP_REPO_URL=https://github.com/USUARIO/financeapp.git \
 
 Usa `RESUME_EXISTING=yes` únicamente con un LXC vacío creado por este instalador.
 
+Si LXC todavía no puede iniciar, el instalador imprime automáticamente la
+salida completa de `pct start --debug`, la configuración generada, la versión y
+arquitectura del host y el estado de `/dev/net/tun`. Conserva ese bloque
+completo: `sync_wait` por sí solo es un error genérico y no identifica el mount,
+hook, binario o permiso que falló.
+
 ## Activar acceso privado HTTPS
 
 El Nginx del LXC escucha únicamente en `127.0.0.1:80`. Entra al contenedor y enlázalo a Tailscale:

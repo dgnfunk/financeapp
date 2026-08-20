@@ -33,6 +33,38 @@ trap 'echo "[ERROR] ${APP} installation failed at line ${LINENO}." >&2' ERR
 die() { echo "[ERROR] $*" >&2; exit 1; }
 info() { echo "[INFO] $*"; }
 ok() { echo "[OK] $*"; }
+start_container() {
+  local start_log
+  start_log="$(mktemp)"
+  TEMP_FILES+=("$start_log")
+
+  if pct start "$CTID" --debug >"$start_log" 2>&1; then
+    return 0
+  fi
+
+  echo >&2
+  echo "[ERROR] Proxmox could not start LXC ${CTID}. Debug output follows:" >&2
+  cat "$start_log" >&2
+  echo >&2
+  echo "[INFO] Generated container configuration:" >&2
+  pct config "$CTID" >&2 || true
+  echo >&2
+  echo "[INFO] Host diagnostics:" >&2
+  printf 'Proxmox: ' >&2
+  pveversion >&2 || true
+  printf 'Kernel: ' >&2
+  uname -srmo >&2 || true
+  printf 'Host architecture: ' >&2
+  dpkg --print-architecture >&2 || uname -m >&2 || true
+  if [[ -c /dev/net/tun ]]; then
+    echo "TUN device: available" >&2
+  else
+    echo "TUN device: missing (a Tailscale bind mount can prevent LXC startup)" >&2
+  fi
+  echo >&2
+  echo "Copy this complete diagnostic block when reporting the failure." >&2
+  return 1
+}
 prompt_default() {
   local variable="$1" label="$2" default="$3" value
   read -r -p "$label [$default]: " value
@@ -164,7 +196,7 @@ EOF
 fi
 
 if ! pct status "$CTID" | grep -q 'status: running'; then
-  pct start "$CTID"
+  start_container
 fi
 info "Waiting for network connectivity"
 for _attempt in {1..60}; do
