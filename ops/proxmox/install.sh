@@ -91,6 +91,11 @@ install -d -o root -g financeapp -m 0750 /etc/financeapp
 if [[ ! -d /opt/financeapp/source/.git ]]; then
   runuser -u financeapp -- git clone --branch "$FINANCEAPP_BRANCH" --single-branch \
     "$FINANCEAPP_REPO_URL" /opt/financeapp/source
+else
+  runuser -u financeapp -- git -C /opt/financeapp/source remote set-url origin "$FINANCEAPP_REPO_URL"
+  runuser -u financeapp -- git -C /opt/financeapp/source fetch --prune --tags origin
+  runuser -u financeapp -- git -C /opt/financeapp/source checkout "$FINANCEAPP_BRANCH"
+  runuser -u financeapp -- git -C /opt/financeapp/source merge --ff-only "origin/${FINANCEAPP_BRANCH}"
 fi
 
 DB_PASSWORD="$(printf '%s' "$DB_PASSWORD_B64" | base64 -d)"
