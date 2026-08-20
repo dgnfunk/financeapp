@@ -6,6 +6,7 @@
 **/.pytest_cache/
 **/.ruff_cache/
 **/.venv/
+**/*.egg-info/
 **/node_modules/
 **/dist/
 backups/
