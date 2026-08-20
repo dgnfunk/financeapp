@@ -1,0 +1,22 @@
+Metadata-Version: 2.4
+Name: finanzas-api
+Version: 0.1.0
+Summary: API privada y self-hosted para finanzas personales
+Requires-Python: >=3.12
+Requires-Dist: alembic<2,>=1.14
+Requires-Dist: cryptography<46,>=44
+Requires-Dist: defusedxml<1,>=0.7
+Requires-Dist: fastapi<1,>=0.115
+Requires-Dist: httpx<1,>=0.28
+Requires-Dist: psycopg[binary]<4,>=3.2
+Requires-Dist: pypdf<7,>=5
+Requires-Dist: python-multipart<1,>=0.0.20
+Requires-Dist: redis<7,>=5
+Requires-Dist: sqlalchemy<3,>=2.0
+Requires-Dist: uvicorn[standard]<1,>=0.34
+Provides-Extra: dev
+Requires-Dist: pytest<9,>=8; extra == "dev"
+Requires-Dist: ruff<1,>=0.9; extra == "dev"
+Provides-Extra: ai
+Requires-Dist: docling<3,>=2; extra == "ai"
+Requires-Dist: rapidocr-onnxruntime<2,>=1.4; extra == "ai"

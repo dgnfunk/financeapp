@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Local dependency environments are excluded from the publication tree"
+paths = [
+  '''(^|/)server/\.venv/''',
+  '''(^|/)web/node_modules/''',
+]
