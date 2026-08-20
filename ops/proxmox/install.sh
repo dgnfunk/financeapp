@@ -10,6 +10,32 @@ CONFIG_PATH="${1:-/root/financeapp-install.env}"
 source "$CONFIG_PATH"
 
 export DEBIAN_FRONTEND=noninteractive
+if [[ "${CONSOLE_AUTOLOGIN:-yes}" == "yes" ]]; then
+  GETTY_OVERRIDE=/etc/systemd/system/container-getty@1.service.d/override.conf
+  install -d -o root -g root -m 0755 "$(dirname "$GETTY_OVERRIDE")"
+  cat >"$GETTY_OVERRIDE" <<'EOF'
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud tty%I 115200,38400,9600 $TERM
+EOF
+  chmod 0644 "$GETTY_OVERRIDE"
+  systemctl daemon-reload
+  systemctl try-restart container-getty@1.service >/dev/null 2>&1 || true
+else
+  rm -f /etc/systemd/system/container-getty@1.service.d/override.conf
+  systemctl daemon-reload
+  systemctl try-restart container-getty@1.service >/dev/null 2>&1 || true
+fi
+
+# A previous interrupted run may have left the Tailscale source enabled with a
+# keyring created under this installer's restrictive umask. Bootstrap only from
+# Debian repositories, then recreate the Tailscale source and public key below
+# with explicit permissions.
+rm -f /etc/apt/sources.list.d/tailscale.list
+if [[ -f /usr/share/keyrings/tailscale-archive-keyring.gpg ]]; then
+  chown root:root /usr/share/keyrings/tailscale-archive-keyring.gpg
+  chmod 0644 /usr/share/keyrings/tailscale-archive-keyring.gpg
+fi
 apt-get update
 apt-get dist-upgrade -y
 apt-get install -y --no-install-recommends \
