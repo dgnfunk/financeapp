@@ -4,13 +4,16 @@ Este despliegue crea un contenedor Debian 13 no privilegiado dedicado a FinanceA
 
 ## Requisitos
 
-- Proxmox VE con acceso a una plantilla Debian 13 y una red con DHCP.
+- Proxmox VE con acceso a una plantilla Debian 13. Si se usa DHCP, reserva la
+  dirección del LXC para que la regla `/32` de PostgreSQL no deje de funcionar.
 - Una base y un rol dedicados existentes en PostgreSQL; sus nombres se solicitan durante la instalación.
 - `pg_hba.conf` debe permitir el IP que recibirá el LXC, preferiblemente como `/32`.
 - Repositorio público de GitHub que contenga este proyecto.
 - Tailscale con MagicDNS y HTTPS habilitado en el tailnet.
 
 El perfil predeterminado usa 2 CPU, 4 GiB de RAM, 512 MiB de swap y 12 GiB de disco. OCR/Docling no se instala inicialmente; puede activarse con `INSTALL_AI=yes` y al menos 9 GiB de RAM.
+El instalador rechaza anticipadamente menos de 1.8 GiB de RAM para el perfil
+base, menos de 8.7 GiB para AI o menos de 2 GiB libres.
 
 ## Publicar el repositorio
 
@@ -38,7 +41,11 @@ FINANCEAPP_REPO_URL=https://github.com/USUARIO/financeapp.git \
   bash -c "$(curl -fsSL https://raw.githubusercontent.com/USUARIO/financeapp/main/ops/proxmox/financeapp-lxc.sh)"
 ```
 
-El instalador solicitará los recursos del contenedor y la contraseña del rol PostgreSQL. La contraseña solo se transporta mediante archivos temporales con permisos `0600`; no se incluye en argumentos de procesos ni en el repositorio.
+El instalador solicitará los recursos del contenedor, la contraseña del rol
+PostgreSQL y el modo TLS. `prefer` conserva compatibilidad; usa
+`DB_SSLMODE=require` cuando el servidor PostgreSQL tenga TLS configurado. La
+contraseña solo se transporta mediante archivos temporales con permisos `0600`;
+no se incluye en argumentos de procesos ni en el repositorio.
 
 Como no se configura una contraseña root del sistema, la consola de Proxmox
 inicia sesión automáticamente como root, igual que los Community Scripts. Esto
@@ -75,6 +82,25 @@ El checkout existente también se actualiza mediante fast-forward como el usuari
 repositorio propiedad de otro usuario.
 Los builds de Node se ejecutan con una ruta explícita y mínima que incluye
 `/usr/local/bin`, independientemente del `PATH` que Debian asigne a `runuser`.
+Cada release conserva checkpoints verificados para el entorno Python, las
+dependencias web y el build PWA. Si una etapa posterior falla, el siguiente
+intento reutiliza esas etapas para el mismo commit en lugar de descargarlas y
+compilarlas nuevamente. Las descargas pip y npm también usan caches persistentes
+en `/opt/financeapp/shared`, por lo que una release nueva puede reutilizar
+paquetes aunque su commit sea distinto.
+
+Mientras una instalación no finalice, `/root/financeapp-install.env` permanece
+dentro del LXC con modo `0600`. Una reanudación lo reutiliza por defecto y omite
+las preguntas de PostgreSQL y la regeneración de claves. Para descartarlo de
+forma explícita puede usarse `REUSE_SAVED_CONFIG=no`. El archivo se elimina
+automáticamente únicamente después de una instalación exitosa.
+El repositorio y la rama guardados deben coincidir con el instalador usado para
+reanudar; una discrepancia se rechaza antes de continuar.
+
+El build PWA es obligatorio porque Git conserva el código React/TypeScript y
+excluye `dist/`; Nginx necesita los assets de producción generados en
+`web/dist/client`. El instalador valida que `index.html` exista antes de marcar
+esa etapa como completa.
 
 Si LXC todavía no puede iniciar, el instalador imprime automáticamente la
 salida completa de `pct start --debug`, la configuración generada, la versión y
@@ -93,6 +119,8 @@ financeapp-configure-tailscale
 ```
 
 El último comando detecta el nombre MagicDNS, configura WebAuthn y publica `https://NODO.TAILNET.ts.net` mediante Tailscale Serve. No utiliza Funnel ni abre FinanceApp a Internet.
+Si se instala con `ENABLE_TAILSCALE=no`, Nginx continúa escuchando únicamente en
+loopback: el script no expone automáticamente un puerto inseguro en la LAN.
 
 ## Actualizaciones
 
@@ -112,14 +140,22 @@ El actualizador:
 5. detiene API y worker;
 6. ejecuta Alembic;
 7. cambia `/opt/financeapp/current` de forma atómica;
-8. inicia servicios y comprueba PostgreSQL y `/api/v1/health`.
+8. inicia servicios y comprueba PostgreSQL, Redis, Nginx, API, worker y
+   `/api/v1/health`;
+9. instala los comandos administrativos de la nueva release solo después de
+   superar esas comprobaciones;
+10. conserva un historial acotado de releases y los siete dumps más recientes.
 
 También se puede desplegar un tag o commit concreto:
 
 ```sh
 financeapp-update v0.2.0
 financeapp-update 0123456789abcdef
+financeapp-update --force
 ```
+
+`--force` reconstruye el mismo commit en una release paralela; no modifica en
+sitio los archivos que están atendiendo solicitudes.
 
 Si el health check falla, el actualizador vuelve automáticamente a la release de aplicación anterior. Las migraciones de base no se revierten automáticamente. El respaldo previo queda indicado en la salida.
 
@@ -146,6 +182,10 @@ Archivos importantes:
 - `/opt/financeapp/previous`: release anterior.
 - `/var/lib/financeapp/documents`: originales cifrados.
 - `/var/backups/financeapp`: dumps anteriores a cada actualización.
+
+Antes de compilar, el actualizador exige espacio para el piso configurado más el
+tamaño actual de PostgreSQL. Los valores `KEEP_RELEASES`, `KEEP_BACKUPS` y
+`MIN_FREE_DISK_MB` se pueden ajustar en `/etc/financeapp/deploy.conf`.
 
 Para cambiar la contraseña PostgreSQL, actualiza de manera consistente `DATABASE_URL` en `financeapp.env` y `PGPASSWORD` en `postgres.env`, prueba con `financeapp-update --check` y reinicia la API/worker.
 

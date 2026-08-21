@@ -12,20 +12,33 @@ DNS_NAME="$(tailscale status --json | jq -r '.Self.DNSName // empty' | sed 's/\.
 [[ -n "$DNS_NAME" ]] || { echo "Tailscale did not return a MagicDNS hostname" >&2; exit 1; }
 ORIGIN="https://${DNS_NAME}"
 ENV_FILE=/etc/financeapp/financeapp.env
+ENV_BACKUP="$(mktemp)"
+cp --preserve=mode,ownership "$ENV_FILE" "$ENV_BACKUP"
+restore_env() {
+  local status=$?
+  cp --preserve=mode,ownership "$ENV_BACKUP" "$ENV_FILE"
+  systemctl restart financeapp-api >/dev/null 2>&1 || true
+  rm -f "$ENV_BACKUP"
+  exit "$status"
+}
+trap restore_env ERR
 
 sed -i \
   -e "s|^WEBAUTHN_RP_ID=.*|WEBAUTHN_RP_ID=${DNS_NAME}|" \
   -e "s|^WEBAUTHN_ORIGIN=.*|WEBAUTHN_ORIGIN=${ORIGIN}|" \
   "$ENV_FILE"
 systemctl restart financeapp-api
-tailscale serve --bg --https=443 http://127.0.0.1:80
+systemctl is-active --quiet financeapp-api nginx
+tailscale serve --bg --yes --https=443 http://127.0.0.1:80
+trap - ERR
+rm -f "$ENV_BACKUP"
 
 for _attempt in {1..20}; do
-  if curl -fsS http://127.0.0.1/api/v1/health >/dev/null; then
+  if curl -fsS "${ORIGIN}/api/v1/health" | jq -e '.status == "ok"' >/dev/null; then
     echo "FinanceApp is available privately at ${ORIGIN}"
     exit 0
   fi
   sleep 1
 done
 echo "FinanceApp services did not become healthy" >&2
-exit 1
+false

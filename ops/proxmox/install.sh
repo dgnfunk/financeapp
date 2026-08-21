@@ -9,7 +9,37 @@ CONFIG_PATH="${1:-/root/financeapp-install.env}"
 # shellcheck disable=SC1090
 source "$CONFIG_PATH"
 
+: "${FINANCEAPP_REPO_URL:?Missing FINANCEAPP_REPO_URL}"
+: "${FINANCEAPP_BRANCH:?Missing FINANCEAPP_BRANCH}"
+: "${DB_HOST:?Missing DB_HOST}"
+: "${DB_PORT:?Missing DB_PORT}"
+: "${DB_NAME:?Missing DB_NAME}"
+: "${DB_USER:?Missing DB_USER}"
+: "${DB_PASSWORD_B64:?Missing DB_PASSWORD_B64}"
+: "${MASTER_TOKEN:?Missing MASTER_TOKEN}"
+: "${DOCUMENT_KEY_B64:?Missing DOCUMENT_KEY_B64}"
+DB_SSLMODE="${DB_SSLMODE:-prefer}"
+[[ "$DB_SSLMODE" == "prefer" || "$DB_SSLMODE" == "require" || "$DB_SSLMODE" == "verify-full" ]] || {
+  echo "Unsupported PostgreSQL SSL mode: ${DB_SSLMODE}" >&2
+  exit 1
+}
+
+MEMORY_MB="$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)"
+MIN_MEMORY_MB=1800
+[[ "${INSTALL_AI:-no}" != "yes" ]] || MIN_MEMORY_MB=8700
+(( MEMORY_MB >= MIN_MEMORY_MB )) || {
+  echo "Insufficient LXC memory: ${MEMORY_MB} MiB available, ${MIN_MEMORY_MB} MiB required for this profile." >&2
+  exit 1
+}
+FREE_DISK_MB="$(df -Pm / | awk 'NR == 2 {print $4}')"
+(( FREE_DISK_MB >= 2048 )) || {
+  echo "Insufficient free disk: ${FREE_DISK_MB} MiB available; at least 2048 MiB is required before installation." >&2
+  exit 1
+}
+
 export DEBIAN_FRONTEND=noninteractive
+INSTALL_STATE=/var/lib/financeapp-installer
+install -d -o root -g root -m 0700 "$INSTALL_STATE"
 if [[ "${CONSOLE_AUTOLOGIN:-yes}" == "yes" ]]; then
   GETTY_OVERRIDE=/etc/systemd/system/container-getty@1.service.d/override.conf
   install -d -o root -g root -m 0755 "$(dirname "$GETTY_OVERRIDE")"
@@ -27,20 +57,32 @@ else
   systemctl try-restart container-getty@1.service >/dev/null 2>&1 || true
 fi
 
-# A previous interrupted run may have left the Tailscale source enabled with a
-# keyring created under this installer's restrictive umask. Bootstrap only from
-# Debian repositories, then recreate the Tailscale source and public key below
-# with explicit permissions.
-rm -f /etc/apt/sources.list.d/tailscale.list
-if [[ -f /usr/share/keyrings/tailscale-archive-keyring.gpg ]]; then
-  chown root:root /usr/share/keyrings/tailscale-archive-keyring.gpg
-  chmod 0644 /usr/share/keyrings/tailscale-archive-keyring.gpg
+TAILSCALE_READY="${INSTALL_STATE}/tailscale-v1"
+if [[ ! -f "$TAILSCALE_READY" ]]; then
+  # A previous interrupted run may have left the Tailscale source enabled with
+  # a keyring created under this installer's restrictive umask. Bootstrap only
+  # from Debian repositories, then recreate the source and public key below.
+  rm -f /etc/apt/sources.list.d/tailscale.list
+  if [[ -f /usr/share/keyrings/tailscale-archive-keyring.gpg ]]; then
+    chown root:root /usr/share/keyrings/tailscale-archive-keyring.gpg
+    chmod 0644 /usr/share/keyrings/tailscale-archive-keyring.gpg
+  fi
 fi
-apt-get update
-apt-get dist-upgrade -y
-apt-get install -y --no-install-recommends \
-  ca-certificates curl git jq nginx openssl redis-server postgresql-client \
-  python3 python3-dev python3-venv build-essential libpq-dev xz-utils
+
+BASE_READY="${INSTALL_STATE}/base-packages-v1"
+for base_command in curl git jq nginx redis-server psql python3 gcc xz; do
+  command -v "$base_command" >/dev/null 2>&1 || rm -f "$BASE_READY"
+done
+if [[ ! -f "$BASE_READY" ]]; then
+  apt-get update
+  apt-get dist-upgrade -y
+  apt-get install -y --no-install-recommends \
+    ca-certificates curl git jq nginx openssl redis-server postgresql-client \
+    python3 python3-dev python3-venv build-essential libpq-dev xz-utils
+  touch "$BASE_READY"
+else
+  echo "Using cached base package stage"
+fi
 
 install_node() {
   local architecture node_arch sums archive version
@@ -58,29 +100,50 @@ install_node() {
   (cd /tmp && grep " ${archive}$" <<<"$sums" | sha256sum -c -)
   mkdir -p /usr/local/lib/nodejs
   tar -xJf "/tmp/${archive}" -C /usr/local/lib/nodejs
+  chmod 0755 /usr/local/lib/nodejs
+  chmod -R a+rX "/usr/local/lib/nodejs/${version}-linux-${node_arch}"
   ln -sfn "/usr/local/lib/nodejs/${version}-linux-${node_arch}/bin/node" /usr/local/bin/node
   ln -sfn "/usr/local/lib/nodejs/${version}-linux-${node_arch}/bin/npm" /usr/local/bin/npm
   ln -sfn "/usr/local/lib/nodejs/${version}-linux-${node_arch}/bin/npx" /usr/local/bin/npx
   rm -f "/tmp/${archive}"
 }
-install_node
-/usr/local/bin/node --version
-env PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/npm --version
+NODE_READY="${INSTALL_STATE}/node-v2"
+if [[ -f "$NODE_READY" ]] &&
+  ! env PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/npm --version >/dev/null 2>&1; then
+  rm -f "$NODE_READY"
+fi
+if [[ ! -f "$NODE_READY" ]]; then
+  install_node
+  /usr/local/bin/node --version
+  env PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/npm --version
+  touch "$NODE_READY"
+else
+  echo "Using cached Node.js stage"
+fi
 
 if [[ "${ENABLE_TAILSCALE:-yes}" == "yes" ]]; then
-  TAILSCALE_KEYRING_TMP="$(mktemp)"
-  TAILSCALE_SOURCE_TMP="$(mktemp)"
-  curl -fsSL --retry 3 https://pkgs.tailscale.com/stable/debian/trixie.noarmor.gpg \
-    -o "$TAILSCALE_KEYRING_TMP"
-  curl -fsSL --retry 3 https://pkgs.tailscale.com/stable/debian/trixie.tailscale-keyring.list \
-    -o "$TAILSCALE_SOURCE_TMP"
-  install -o root -g root -m 0644 "$TAILSCALE_KEYRING_TMP" \
-    /usr/share/keyrings/tailscale-archive-keyring.gpg
-  install -o root -g root -m 0644 "$TAILSCALE_SOURCE_TMP" \
-    /etc/apt/sources.list.d/tailscale.list
-  rm -f "$TAILSCALE_KEYRING_TMP" "$TAILSCALE_SOURCE_TMP"
-  apt-get update
-  apt-get install -y tailscale
+  if [[ -f "$TAILSCALE_READY" ]] &&
+    { ! command -v tailscale >/dev/null 2>&1 || ! test -r /usr/share/keyrings/tailscale-archive-keyring.gpg; }; then
+    rm -f "$TAILSCALE_READY"
+  fi
+  if [[ ! -f "$TAILSCALE_READY" ]]; then
+    TAILSCALE_KEYRING_TMP="$(mktemp)"
+    TAILSCALE_SOURCE_TMP="$(mktemp)"
+    curl -fsSL --retry 3 https://pkgs.tailscale.com/stable/debian/trixie.noarmor.gpg \
+      -o "$TAILSCALE_KEYRING_TMP"
+    curl -fsSL --retry 3 https://pkgs.tailscale.com/stable/debian/trixie.tailscale-keyring.list \
+      -o "$TAILSCALE_SOURCE_TMP"
+    install -o root -g root -m 0644 "$TAILSCALE_KEYRING_TMP" \
+      /usr/share/keyrings/tailscale-archive-keyring.gpg
+    install -o root -g root -m 0644 "$TAILSCALE_SOURCE_TMP" \
+      /etc/apt/sources.list.d/tailscale.list
+    rm -f "$TAILSCALE_KEYRING_TMP" "$TAILSCALE_SOURCE_TMP"
+    apt-get update
+    apt-get install -y tailscale
+    touch "$TAILSCALE_READY"
+  else
+    echo "Using cached Tailscale stage"
+  fi
 fi
 
 id financeapp >/dev/null 2>&1 || useradd --system --home-dir /opt/financeapp --shell /usr/sbin/nologin financeapp
@@ -89,6 +152,8 @@ install -d -o financeapp -g financeapp -m 0750 \
   /opt/financeapp /opt/financeapp/releases /opt/financeapp/shared \
   /var/lib/financeapp/documents /var/backups/financeapp
 install -d -o root -g financeapp -m 0750 /etc/financeapp
+runuser -u financeapp -- env HOME=/opt/financeapp/shared PATH=/usr/local/bin:/usr/bin:/bin \
+  /usr/local/bin/npm --version
 
 if [[ ! -d /opt/financeapp/source/.git ]]; then
   runuser -u financeapp -- git clone --branch "$FINANCEAPP_BRANCH" --single-branch \
@@ -101,11 +166,11 @@ else
 fi
 
 DB_PASSWORD="$(printf '%s' "$DB_PASSWORD_B64" | base64 -d)"
-export DB_USER DB_PASSWORD DB_HOST DB_PORT DB_NAME
+export DB_USER DB_PASSWORD DB_HOST DB_PORT DB_NAME DB_SSLMODE
 PG_DSN="$(python3 - <<'PY'
 import os
 from urllib.parse import quote
-print(f"postgresql://{quote(os.environ['DB_USER'], safe='')}:{quote(os.environ['DB_PASSWORD'], safe='')}@{os.environ['DB_HOST']}:{os.environ['DB_PORT']}/{quote(os.environ['DB_NAME'], safe='')}")
+print(f"postgresql://{quote(os.environ['DB_USER'], safe='')}:{quote(os.environ['DB_PASSWORD'], safe='')}@{os.environ['DB_HOST']}:{os.environ['DB_PORT']}/{quote(os.environ['DB_NAME'], safe='')}?sslmode={quote(os.environ['DB_SSLMODE'], safe='')}")
 PY
 )"
 DATABASE_URL="${PG_DSN/postgresql:\/\//postgresql+psycopg:\/\/}"
@@ -130,6 +195,7 @@ chown root:financeapp /etc/financeapp/financeapp.env
   printf 'PGDATABASE=%q\n' "$DB_NAME"
   printf 'PGUSER=%q\n' "$DB_USER"
   printf 'PGPASSWORD=%q\n' "$DB_PASSWORD"
+  printf 'PGSSLMODE=%q\n' "$DB_SSLMODE"
 } >/etc/financeapp/postgres.env
 chmod 0600 /etc/financeapp/postgres.env
 
@@ -138,6 +204,8 @@ FINANCEAPP_REPO_URL=${FINANCEAPP_REPO_URL}
 FINANCEAPP_BRANCH=${FINANCEAPP_BRANCH}
 INSTALL_AI=${INSTALL_AI:-no}
 KEEP_RELEASES=3
+KEEP_BACKUPS=7
+MIN_FREE_DISK_MB=2048
 EOF
 chmod 0644 /etc/financeapp/deploy.conf
 
@@ -226,7 +294,7 @@ systemctl daemon-reload
 systemctl enable redis-server nginx financeapp-api financeapp-worker >/dev/null
 systemctl start redis-server
 
-if ! PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+if ! PGPASSWORD="$DB_PASSWORD" PGSSLMODE="$DB_SSLMODE" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
   -v ON_ERROR_STOP=1 -Atc 'select 1' >/dev/null; then
   LXC_IP="$(hostname -I | awk '{print $1}')"
   echo "PostgreSQL rejected the LXC connection. Permit ${LXC_IP}/32 in pg_hba.conf." >&2
