@@ -161,7 +161,9 @@ El actualizador:
    PostgreSQL 17;
 4. crea `/var/backups/financeapp/pre-update-*.dump`;
 5. detiene API y worker;
-6. ejecuta Alembic;
+6. ejecuta Alembic desde el directorio `server` de la release, después de
+   comprobar que su configuración y migraciones son legibles por el usuario
+   `financeapp`;
 7. cambia `/opt/financeapp/current` de forma atómica;
 8. inicia servicios y comprueba PostgreSQL, Redis, Nginx, API, worker y
    `/api/v1/health`;
