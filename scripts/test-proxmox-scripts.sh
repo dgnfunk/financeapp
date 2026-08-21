@@ -93,10 +93,21 @@ require_text "$INSTALL" '/usr/local/bin/npm --version' "installation must valida
 require_text "$INSTALL" 'MIN_MEMORY_MB=1800' "installation must fail early on insufficient memory"
 require_text "$INSTALL" 'MIN_FREE_DISK_MB=2048' "deployment must persist a disk-space floor"
 require_text "$INSTALL" 'postgresql-17 postgresql-client-17' "server and client must use PostgreSQL major 17"
+# shellcheck disable=SC2016
+require_text "$INSTALL" 'pg_createcluster "$POSTGRES_MAJOR" main --start-conf=auto' "resume must recreate a missing PostgreSQL cluster"
+# shellcheck disable=SC2016
+require_text "$INSTALL" 'POSTGRES_CLUSTER_SERVICE="postgresql@${POSTGRES_MAJOR}-main.service"' "the concrete PostgreSQL cluster service must be selected"
+# shellcheck disable=SC2016
+require_text "$INSTALL" 'systemctl restart "$POSTGRES_CLUSTER_SERVICE"' "installation must start the concrete PostgreSQL cluster"
+# shellcheck disable=SC2016
+require_text "$INSTALL" '"$PG_BIN_DIR/pg_isready" --quiet --host /var/run/postgresql --port 5432' "installation must wait for PostgreSQL readiness"
+# shellcheck disable=SC2016
+require_text "$INSTALL" 'journalctl -u "$POSTGRES_CLUSTER_SERVICE"' "PostgreSQL startup failures must include cluster diagnostics"
 require_text "$INSTALL" 'listen_addresses 127.0.0.1' "PostgreSQL must listen only on loopback"
 require_text "$INSTALL" 'password_encryption scram-sha-256' "PostgreSQL must use SCRAM passwords"
 require_text "$INSTALL" 'PGSSLMODE=%q\n' "local database environment must be explicit"
-require_text "$UPDATE" 'systemctl is-active --quiet postgresql redis-server nginx financeapp-api financeapp-worker' "health check must validate all services"
+# shellcheck disable=SC2016
+require_text "$UPDATE" 'systemctl is-active --quiet "$POSTGRES_CLUSTER_SERVICE" redis-server nginx financeapp-api financeapp-worker' "health check must validate the concrete PostgreSQL cluster and all application services"
 require_text "$UPDATE" 'redis-cli ping' "health check must validate Redis"
 require_text "$UPDATE" 'verify_postgres_versions' "updates must reject incompatible pg_dump versions"
 require_order "$UPDATE" 'verify_postgres_versions' 'systemctl stop financeapp-worker' "PostgreSQL versions must be checked before stopping services"

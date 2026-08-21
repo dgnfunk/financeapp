@@ -27,6 +27,7 @@ source "$CONFIG_PATH"
 }
 POSTGRES_MAJOR=17
 PG_BIN_DIR="/usr/lib/postgresql/${POSTGRES_MAJOR}/bin"
+POSTGRES_CLUSTER_SERVICE="postgresql@${POSTGRES_MAJOR}-main.service"
 
 MEMORY_MB="$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)"
 MIN_MEMORY_MB=1800
@@ -97,10 +98,24 @@ fi
 if [[ ! -f "$POSTGRES_READY" ]]; then
   apt-get update
   apt-get install -y --no-install-recommends postgresql-17 postgresql-client-17
-  touch "$POSTGRES_READY"
 else
   echo "Using cached local PostgreSQL 17 stage"
 fi
+if ! pg_lsclusters --no-header | awk '$1 == 17 && $2 == "main" {found=1} END {exit !found}'; then
+  echo "Creating missing PostgreSQL ${POSTGRES_MAJOR}/main cluster"
+  pg_createcluster "$POSTGRES_MAJOR" main --start-conf=auto
+fi
+for postgres_binary in psql pg_dump pg_restore pg_isready; do
+  [[ -x "${PG_BIN_DIR}/${postgres_binary}" ]] || {
+    echo "Missing PostgreSQL ${POSTGRES_MAJOR} binary: ${PG_BIN_DIR}/${postgres_binary}" >&2
+    exit 1
+  }
+done
+pg_lsclusters --no-header | awk '$1 == 17 && $2 == "main" {found=1} END {exit !found}' || {
+  echo "PostgreSQL ${POSTGRES_MAJOR}/main cluster was not created" >&2
+  exit 1
+}
+touch "$POSTGRES_READY"
 
 POSTGRES_PASSWORD="$(printf '%s' "$POSTGRES_PASSWORD_B64" | base64 -d)"
 [[ -n "$POSTGRES_PASSWORD" ]] || { echo "Local PostgreSQL password is empty" >&2; exit 1; }
@@ -109,9 +124,23 @@ pg_conftool "$POSTGRES_MAJOR" main set password_encryption scram-sha-256
 PG_HBA="/etc/postgresql/${POSTGRES_MAJOR}/main/pg_hba.conf"
 HBA_RULE="host ${POSTGRES_DB} ${POSTGRES_USER} 127.0.0.1/32 scram-sha-256"
 grep -Fqx "$HBA_RULE" "$PG_HBA" || printf '%s\n' "$HBA_RULE" >>"$PG_HBA"
-systemctl enable postgresql >/dev/null
-systemctl restart postgresql
-systemctl is-active --quiet postgresql
+systemctl enable "$POSTGRES_CLUSTER_SERVICE" >/dev/null
+if ! systemctl restart "$POSTGRES_CLUSTER_SERVICE"; then
+  echo "PostgreSQL cluster ${POSTGRES_MAJOR}/main failed to start. Diagnostics:" >&2
+  pg_lsclusters >&2 || true
+  journalctl -u "$POSTGRES_CLUSTER_SERVICE" --no-pager -n 80 >&2 || true
+  exit 1
+fi
+for _ in {1..30}; do
+  if "$PG_BIN_DIR/pg_isready" --quiet --host /var/run/postgresql --port 5432; then break; fi
+  sleep 1
+done
+if ! "$PG_BIN_DIR/pg_isready" --quiet --host /var/run/postgresql --port 5432; then
+  echo "PostgreSQL cluster ${POSTGRES_MAJOR}/main started but did not become ready." >&2
+  pg_lsclusters >&2 || true
+  journalctl -u "$POSTGRES_CLUSTER_SERVICE" --no-pager -n 80 >&2 || true
+  exit 1
+fi
 
 runuser -u postgres -- "$PG_BIN_DIR/psql" -v ON_ERROR_STOP=1 \
   --set=db_user="$POSTGRES_USER" --set=db_password="$POSTGRES_PASSWORD" postgres <<'SQL'
@@ -268,9 +297,9 @@ install -m 0755 /opt/financeapp/source/ops/proxmox/backup.sh /usr/local/sbin/fin
 cat >/etc/systemd/system/financeapp-api.service <<'EOF'
 [Unit]
 Description=FinanceApp API
-After=network-online.target postgresql.service redis-server.service
+After=network-online.target postgresql@17-main.service redis-server.service
 Wants=network-online.target
-Requires=postgresql.service redis-server.service
+Requires=postgresql@17-main.service redis-server.service
 
 [Service]
 Type=simple
@@ -294,8 +323,8 @@ EOF
 cat >/etc/systemd/system/financeapp-worker.service <<'EOF'
 [Unit]
 Description=FinanceApp document worker
-After=network-online.target postgresql.service redis-server.service financeapp-api.service
-Requires=postgresql.service redis-server.service
+After=network-online.target postgresql@17-main.service redis-server.service financeapp-api.service
+Requires=postgresql@17-main.service redis-server.service
 
 [Service]
 Type=simple
@@ -319,8 +348,8 @@ EOF
 cat >/etc/systemd/system/financeapp-backup.service <<'EOF'
 [Unit]
 Description=FinanceApp daily PostgreSQL backup
-After=postgresql.service
-Requires=postgresql.service
+After=postgresql@17-main.service
+Requires=postgresql@17-main.service
 
 [Service]
 Type=oneshot
@@ -373,8 +402,8 @@ ln -sfn /etc/nginx/sites-available/financeapp /etc/nginx/sites-enabled/financeap
 nginx -t
 
 systemctl daemon-reload
-systemctl enable postgresql redis-server nginx financeapp-api financeapp-worker financeapp-backup.timer >/dev/null
-systemctl start postgresql redis-server
+systemctl enable "$POSTGRES_CLUSTER_SERVICE" redis-server nginx financeapp-api financeapp-worker financeapp-backup.timer >/dev/null
+systemctl start "$POSTGRES_CLUSTER_SERVICE" redis-server
 
 if ! PGPASSWORD="$POSTGRES_PASSWORD" PGSSLMODE=disable "$PG_BIN_DIR/psql" \
   -h 127.0.0.1 -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \

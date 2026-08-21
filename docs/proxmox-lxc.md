@@ -101,6 +101,18 @@ antiguo falso positivo: si el archivo temporal ya no existe, conserva
 `MASTER_TOKEN` y `DOCUMENT_KEY_B64` desde `/etc/financeapp`, genera credenciales
 para una base PostgreSQL local nueva y no vuelve a contactar la base externa.
 
+PostgreSQL se administra mediante la unidad concreta
+`postgresql@17-main.service`; la unidad genérica `postgresql.service` no basta
+para confirmar que el clúster esté ejecutándose. Si el clúster no inicia, el
+instalador muestra automáticamente `pg_lsclusters` y su journal. También puede
+consultarse manualmente con:
+
+```sh
+systemctl status postgresql@17-main.service --no-pager
+pg_lsclusters
+journalctl -u postgresql@17-main.service --no-pager -n 100
+```
+
 El build PWA es obligatorio porque Git conserva el código React/TypeScript y
 excluye `dist/`; Nginx necesita los assets de producción generados en
 `web/dist/client`. El instalador valida que `index.html` exista antes de marcar
@@ -173,7 +185,7 @@ financeapp-update --rollback
 ## Operación
 
 ```sh
-systemctl status financeapp-api financeapp-worker nginx redis-server
+systemctl status postgresql@17-main financeapp-api financeapp-worker nginx redis-server
 journalctl -u financeapp-api -u financeapp-worker -f
 tailscale serve status
 ```

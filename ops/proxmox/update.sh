@@ -55,6 +55,7 @@ export PGSSLMODE
 PG_DUMP_BIN="${PG_BIN_DIR}/pg_dump"
 PG_RESTORE_BIN="${PG_BIN_DIR}/pg_restore"
 PSQL_BIN="${PG_BIN_DIR}/psql"
+POSTGRES_CLUSTER_SERVICE="postgresql@${POSTGRES_MAJOR}-main.service"
 exec 9>"$LOCK"
 flock -n 9 || { echo "Another FinanceApp update is running" >&2; exit 1; }
 
@@ -80,7 +81,7 @@ health_check() {
   "$PSQL_BIN" -v ON_ERROR_STOP=1 -Atc 'select 1' >/dev/null
   [[ "$(redis-cli ping 2>/dev/null)" == "PONG" ]]
   for _ in {1..30}; do
-    if systemctl is-active --quiet postgresql redis-server nginx financeapp-api financeapp-worker &&
+    if systemctl is-active --quiet "$POSTGRES_CLUSTER_SERVICE" redis-server nginx financeapp-api financeapp-worker &&
       curl -fsS http://127.0.0.1/api/v1/health | jq -e '.status == "ok"' >/dev/null; then
       return 0
     fi
