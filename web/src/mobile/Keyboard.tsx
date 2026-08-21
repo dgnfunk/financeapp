@@ -152,6 +152,9 @@ export function useKeyboardDismissDrag() {
         return;
       }
 
+      // Once the footer or keyboard claims a vertical dismissal, do not let a
+      // parent FlowStack pointer recognizer replace its pointer capture.
+      event.stopPropagation();
       keyboard.setDragging(true);
       dragRef.current = {
         pointerId: event.pointerId,
