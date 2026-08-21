@@ -1,10 +1,20 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-async function drag(page: Page, locator: Locator, deltaX: number, deltaY: number, steps = 8) {
+async function drag(
+  page: Page,
+  locator: Locator,
+  deltaX: number,
+  deltaY: number,
+  steps = 8,
+  startOffset?: { x?: number; y?: number; fromRight?: number },
+) {
   const box = await locator.boundingBox();
   if (!box) throw new Error("Drag target has no bounding box");
-  const startX = box.x + box.width / 2;
-  const startY = box.y + box.height / 2;
+  const startX = box.x +
+    (startOffset?.fromRight == null
+      ? (startOffset?.x ?? box.width / 2)
+      : box.width - startOffset.fromRight);
+  const startY = box.y + (startOffset?.y ?? box.height / 2);
 
   await page.mouse.move(startX, startY);
   await page.mouse.down();
@@ -105,7 +115,13 @@ test("keyboard and its attached footer dismiss on the same transition", async ({
 
   await input.click();
   await expect(keyboard).toHaveAttribute("data-visible", "true");
-  await drag(page, footer, 0, 120, 5);
+  const keyboardHeight = await keyboard.evaluate((element) => Number.parseFloat(element.style.height));
+  await expect
+    .poll(() => footer.evaluate((element) => Number.parseFloat(getComputedStyle(element).bottom)))
+    .toBeCloseTo(keyboardHeight, 0);
+  // Start in the footer gutter. Its center is occupied by the text input,
+  // which intentionally opts out of drag dismissal to preserve text editing.
+  await drag(page, footer, 0, 120, 5, { fromRight: 8 });
   await expect(keyboard).toHaveAttribute("data-visible", "false");
 
   await page.waitForTimeout(100);
