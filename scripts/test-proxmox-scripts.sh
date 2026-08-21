@@ -103,8 +103,10 @@ require_text "$INSTALL" 'systemctl restart "$POSTGRES_CLUSTER_SERVICE"' "install
 require_text "$INSTALL" '"$PG_BIN_DIR/pg_isready" --quiet --host /var/run/postgresql --port 5432' "installation must wait for PostgreSQL readiness"
 # shellcheck disable=SC2016
 require_text "$INSTALL" 'journalctl -u "$POSTGRES_CLUSTER_SERVICE"' "PostgreSQL startup failures must include cluster diagnostics"
-require_text "$INSTALL" 'listen_addresses 127.0.0.1' "PostgreSQL must listen only on loopback"
-require_text "$INSTALL" 'password_encryption scram-sha-256' "PostgreSQL must use SCRAM passwords"
+require_text "$INSTALL" 'set listen_addresses "'\''127.0.0.1'\''"' "PostgreSQL listen_addresses must be a quoted loopback string"
+require_text "$INSTALL" 'set password_encryption "'\''scram-sha-256'\''"' "PostgreSQL password_encryption must be a quoted enum value"
+require_text "$INSTALL" 'validate_postgres_setting listen_addresses 127.0.0.1' "PostgreSQL configuration must be parsed before startup"
+require_text "$INSTALL" 'validate_postgres_setting password_encryption scram-sha-256' "PostgreSQL SCRAM configuration must be parsed before startup"
 require_text "$INSTALL" 'PGSSLMODE=%q\n' "local database environment must be explicit"
 # shellcheck disable=SC2016
 require_text "$UPDATE" 'systemctl is-active --quiet "$POSTGRES_CLUSTER_SERVICE" redis-server nginx financeapp-api financeapp-worker' "health check must validate the concrete PostgreSQL cluster and all application services"
