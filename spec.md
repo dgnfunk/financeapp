@@ -119,3 +119,71 @@ Aplicación personal, self-hosted y de un solo usuario para registrar, importar,
 - Cadena Alembic validada hasta `c73e4f9a0d21` y SQL PostgreSQL generado en modo offline.
 
 No fue posible ejecutar contenedores ni una migración contra PostgreSQL real porque Docker no está instalado en este entorno. La ceremonia WebAuthn y la restauración restic requieren el hostname HTTPS, dispositivo y repositorio de respaldo definitivos; ambas deben comprobarse antes de usar la instalación como única copia de datos reales.
+
+## 13. Decisiones y estado del despliegue Proxmox — 20 de agosto de 2026
+
+### Decisiones confirmadas
+
+- El despliegue objetivo es un LXC Debian 13 no privilegiado; PostgreSQL queda
+  externo y Redis, Nginx, API, worker y PWA viven dentro del LXC.
+- La plantilla debe coincidir con la arquitectura del host. Debian 13 usa
+  `nesting=1,keyctl=1`; Tailscale recibe `/dev/net/tun` sin publicar puertos del
+  contenedor.
+- El código se descarga como usuario `financeapp`; todas las operaciones Git
+  posteriores se ejecutan con el mismo usuario, sin excepciones globales
+  `safe.directory`.
+- Node se instala en `/usr/local/lib/nodejs` como software legible/ejecutable
+  por usuarios del sistema. Los builds usan `/usr/local/bin/npm` y un `PATH`
+  mínimo explícito.
+- El build PWA permanece en el LXC: el repositorio excluye artefactos `dist/` y
+  Nginx sirve el resultado verificado en `web/dist/client`.
+- La consola Proxmox usa autologin root cuando no se configura una contraseña
+  del sistema. Esto no habilita autenticación root por contraseña mediante SSH.
+
+### Recuperación y checkpoints
+
+- La configuración inicial permanece en `/root/financeapp-install.env` con modo
+  `0600` hasta completar la instalación. `RESUME_EXISTING=yes` la reutiliza por
+  defecto y no vuelve a solicitar PostgreSQL ni regenera claves. El operador
+  puede descartarla explícitamente con `REUSE_SAVED_CONFIG=no`.
+- Bootstrap guarda checkpoints versionados en
+  `/var/lib/financeapp-installer` para paquetes base, Node y Tailscale.
+- Cada release por commit guarda checkpoints separados para el entorno Python,
+  dependencias npm y build PWA. Antes de adoptar un entorno Python preexistente
+  se verifican imports; antes de aceptar el build PWA se exige
+  `web/dist/client/index.html`.
+- Las descargas pip y npm se conservan bajo `/opt/financeapp/shared` para que
+  nuevos commits reutilicen artefactos aunque, por corrección, no compartan el
+  entorno virtual ni el build final de otra release.
+- Los checkpoints pertenecen a etapas versionadas. Cambiar la implementación de
+  una etapa requiere incrementar el sufijo del marcador correspondiente.
+- El actualizador valida RAM, espacio libre, tamaño de la base, PostgreSQL,
+  Redis y los cuatro servicios antes de aceptar una release. Releases y dumps
+  tienen retención acotada; `--force` construye en un worktree paralelo.
+- PostgreSQL admite `prefer`, `require` y `verify-full` mediante
+  `DB_SSLMODE`. El acceso web continúa limitado a loopback aunque Tailscale se
+  desactive.
+
+### Evidencia operativa actual
+
+| Elemento | Estado | Evidencia |
+|---|---|---|
+| Creación LXC amd64 | Implementado y confirmado | El usuario confirmó que CT 106 inicia con plantilla amd64. |
+| Bootstrap Debian/Tailscale | Implementado y confirmado parcialmente | Paquetes base y Tailscale 1.102.3 se instalaron dentro de CT 106. |
+| Conexión PostgreSQL | Implementado y confirmado | La instalación superó la comprobación `psql` contra la instancia externa. |
+| Build backend Python | Implementado y confirmado | `finanzas-api` creó e instaló su wheel dentro de CT 106. |
+| Permisos Node/npm | Corregido en código; sin verificar en CT | El último intento falló al ejecutar npm como `financeapp`; ahora el árbol Node recibe permisos `a+rX` y npm se valida con ese usuario. |
+| Reanudación sin preguntas | Implementado en código; sin verificar en CT | Reutiliza el archivo `0600` dejado por el intento fallido. |
+| Checkpoints de etapas | Implementado y validado estáticamente; sin verificar en CT | Marcadores versionados, imports Python, árbol npm y artefacto PWA. |
+| Pruebas del despliegue | Implementado localmente | `test-proxmox-scripts.sh`, `bash -n`, ShellCheck y escaneo Gitleaks; falta la ejecución real en Proxmox. |
+| Build PWA, migración y health check | Bloqueado por el reintento operativo | Deben confirmarse en CT 106 después de publicar y reanudar. |
+
+### Próximo trabajo priorizado
+
+1. **Ahora:** publicar los cambios del instalador y reanudar CT 106 sin volver a
+   introducir credenciales.
+2. **Ahora:** confirmar que se reutiliza el entorno Python, que npm se ejecuta
+   como `financeapp` y que se genera `web/dist/client/index.html`.
+3. **Ahora:** verificar migración Alembic, servicios systemd y health check.
+4. **Siguiente:** ejecutar `tailscale up` y configurar el hostname HTTPS antes
+   de validar passkeys y acceso PWA desde iPhone.
