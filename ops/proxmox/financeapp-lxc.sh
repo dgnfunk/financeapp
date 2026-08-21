@@ -364,5 +364,9 @@ else
   echo "No listener was exposed. Configure a private HTTPS reverse proxy before accessing the application."
 fi
 echo
+echo "Optional trusted-home-LAN HTTP access after an update:"
+echo "  financeapp-configure-tailscale --lan-enable"
+echo "  # Then open http://${LXC_IP} while connected to the home LAN."
+echo
 echo "Future updates inside the LXC: financeapp-update"
 pct exec "$CTID" -- rm -f /root/financeapp-install.sh /root/financeapp-install.env

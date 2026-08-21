@@ -331,6 +331,7 @@ chmod 0644 /etc/financeapp/deploy.conf
 
 install -m 0755 /opt/financeapp/source/ops/proxmox/update.sh /usr/local/sbin/financeapp-update
 install -m 0755 /opt/financeapp/source/ops/proxmox/configure-tailscale.sh /usr/local/sbin/financeapp-configure-tailscale
+install -m 0755 /opt/financeapp/source/ops/proxmox/configure-lan.sh /usr/local/sbin/financeapp-configure-lan
 install -m 0755 /opt/financeapp/source/ops/proxmox/backup.sh /usr/local/sbin/financeapp-backup
 
 cat >/etc/systemd/system/financeapp-api.service <<'EOF'
@@ -413,9 +414,11 @@ RandomizedDelaySec=30m
 WantedBy=timers.target
 EOF
 
+[[ -e /etc/nginx/financeapp-listeners.conf ]] || install -o root -g root -m 0644 /dev/null /etc/nginx/financeapp-listeners.conf
 cat >/etc/nginx/sites-available/financeapp <<'EOF'
 server {
   listen 127.0.0.1:80;
+  include /etc/nginx/financeapp-listeners.conf;
   server_name _;
   server_tokens off;
   client_max_body_size 25m;

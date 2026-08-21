@@ -2,7 +2,7 @@
 
 ## 1. Resumen del proyecto
 
-Aplicación personal, self-hosted y de un solo usuario para registrar, importar, presupuestar y proyectar finanzas desde una PWA móvil o un panel administrativo de escritorio. Los datos, documentos, OCR y chat permanecen en el equipo del propietario y la aplicación solo se publica mediante Tailscale Serve.
+Aplicación personal, self-hosted y de un solo usuario para registrar, importar, presupuestar y proyectar finanzas desde una PWA móvil o un panel administrativo de escritorio. Los datos, documentos, OCR y chat permanecen en el equipo del propietario. Tailscale Serve con HTTPS es la publicación recomendada; el propietario puede habilitar explícitamente HTTP limitado a la IPv4 doméstica de `eth0` para acceso local por IP.
 
 ## 2. Objetivos
 
@@ -59,6 +59,10 @@ Aplicación personal, self-hosted y de un solo usuario para registrar, importar,
 - El chat no elimina, restaura ni administra seguridad o claves.
 - Los borradores offline se cifran y se reintentan al recuperar conexión.
 - Ningún texto financiero sensible aparece en Web Push.
+- El acceso LAN HTTP es opt-in, reversible, se limita a una IPv4 asignada a
+  `eth0` y nunca abre PostgreSQL, Redis ni el puerto interno de la API.
+- Passkeys, service worker e instalación PWA se validan únicamente sobre un
+  origen HTTPS confiable; el acceso por IP/HTTP no se presenta como equivalente.
 
 ## 7. Criterios de aceptación
 
@@ -161,8 +165,10 @@ No fue posible ejecutar contenedores ni una migración contra PostgreSQL real po
   Redis y los cuatro servicios antes de aceptar una release. Releases y dumps
   tienen retención acotada; `--force` construye en un worktree paralelo.
 - PostgreSQL y su cliente quedan fijados a la versión mayor 17 de Debian 13,
-  escuchan solo en loopback y usan credenciales SCRAM generadas por nodo. El
-  acceso web también continúa limitado a loopback aunque Tailscale se desactive.
+  escuchan solo en loopback y usan credenciales SCRAM generadas por nodo. Nginx
+  conserva su listener loopback para Tailscale y permite añadir o retirar un
+  listener HTTP limitado a la IPv4 de `eth0`; esta excepción LAN nunca usa
+  `0.0.0.0`.
 - Un timer crea dumps diarios verificados con retención de siete copias. Las
   rutas de PostgreSQL, documentos, configuración y dumps deben incluirse en el
   respaldo externo del LXC.
@@ -173,20 +179,20 @@ No fue posible ejecutar contenedores ni una migración contra PostgreSQL real po
 |---|---|---|
 | Creación LXC amd64 | Implementado y confirmado | El usuario confirmó que CT 106 inicia con plantilla amd64. |
 | Bootstrap Debian/Tailscale | Implementado y confirmado parcialmente | Paquetes base y Tailscale 1.102.3 se instalaron dentro de CT 106. |
-| PostgreSQL local | Implementado en código; validación en CT pendiente | PostgreSQL 17 local reemplaza la dependencia externa; CT 106 usará una base nueva. |
+| PostgreSQL local | Implementado y confirmado | CT 106 ejecutó migraciones reales sobre PostgreSQL 17 local y creó dumps verificados. |
 | Build backend Python | Implementado y confirmado | `finanzas-api` creó e instaló su wheel dentro de CT 106. |
-| Permisos Node/npm | Corregido en código; sin verificar en CT | El último intento falló al ejecutar npm como `financeapp`; ahora el árbol Node recibe permisos `a+rX` y npm se valida con ese usuario. |
-| Reanudación sin preguntas | Implementado en código; sin verificar en CT | Reutiliza el archivo `0600` dejado por el intento fallido. |
-| Checkpoints de etapas | Implementado y validado estáticamente; sin verificar en CT | Marcadores versionados, imports Python, árbol npm y artefacto PWA. |
+| Permisos Node/npm | Implementado y confirmado | El build Vite finalizó dentro de CT 106 como parte del despliegue exitoso. |
+| Reanudación sin preguntas | Implementado y confirmado | CT 106 reutilizó la configuración y checkpoints guardados durante múltiples reanudaciones. |
+| Checkpoints de etapas | Implementado y confirmado | La salida operativa confirmó reutilización de paquetes, Python, npm y build por release. |
 | Pruebas del despliegue | Implementado localmente | `test-proxmox-scripts.sh`, `bash -n`, ShellCheck y escaneo Gitleaks; falta la ejecución real en Proxmox. |
-| Build PWA, migración y health check | Bloqueado por el reintento operativo | Deben confirmarse en CT 106 después de publicar y reanudar. |
+| Build PWA, migración y health check | Implementado y confirmado | CT 106 compiló la PWA, migró hasta `c73e4f9a0d21`, pasó health check y creó backup diario. |
+| Acceso LAN por IP | Implementado en código; validación operativa pendiente | `configure-lan.sh` administra un listener Nginx específico para `eth0`, con enable/status/disable y rollback. |
 
 ### Próximo trabajo priorizado
 
-1. **Ahora:** publicar el instalador autocontenido y reanudar CT 106; debe
-   recuperar las claves existentes y crear PostgreSQL 17 local sin contactar la
-   base externa.
-2. **Ahora:** verificar dump/restore, migración Alembic, timer diario, servicios
-   systemd y health check.
-3. **Siguiente:** ejecutar `tailscale up` y configurar el hostname HTTPS antes
-   de validar passkeys y acceso PWA desde iPhone.
+1. **Ahora:** publicar y ejecutar la configuración LAN; comprobar acceso desde
+   otro dispositivo doméstico y que TCP 80 no sea alcanzable fuera de la subred.
+2. **Ahora:** ejecutar `tailscale up` y configurar el hostname HTTPS antes de
+   validar passkeys y acceso PWA desde iPhone.
+3. **Siguiente:** realizar una restauración completa del dump/restic y documentar
+   el resultado operativo.
