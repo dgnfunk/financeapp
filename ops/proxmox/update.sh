@@ -69,6 +69,10 @@ restart_stack() {
   systemctl restart financeapp-api financeapp-worker nginx
 }
 
+git_as_financeapp() {
+  runuser -u financeapp -- git -C "$SOURCE" "$@"
+}
+
 if [[ "$ROLLBACK" == "yes" ]]; then
   [[ -L "$PREVIOUS" && -d "$(readlink -f "$PREVIOUS")" ]] || { echo "No previous release is available" >&2; exit 1; }
   old_current="$(readlink -f "$CURRENT")"
@@ -82,12 +86,12 @@ if [[ "$ROLLBACK" == "yes" ]]; then
   exit 0
 fi
 
-git -C "$SOURCE" remote set-url origin "$FINANCEAPP_REPO_URL"
-runuser -u financeapp -- git -C "$SOURCE" fetch --prune --tags origin
+git_as_financeapp remote set-url origin "$FINANCEAPP_REPO_URL"
+git_as_financeapp fetch --prune --tags origin
 if [[ -z "$REF" ]]; then
   REF="origin/${FINANCEAPP_BRANCH}"
 fi
-TARGET_COMMIT="$(git -C "$SOURCE" rev-parse --verify "${REF}^{commit}")"
+TARGET_COMMIT="$(git_as_financeapp rev-parse --verify "${REF}^{commit}")"
 CURRENT_COMMIT=""
 [[ -L "$CURRENT" ]] && CURRENT_COMMIT="$(basename "$(readlink -f "$CURRENT")")"
 
@@ -109,7 +113,7 @@ fi
 RELEASE="${RELEASES}/${TARGET_COMMIT}"
 if [[ ! -d "$RELEASE" ]]; then
   echo "Preparing release ${TARGET_COMMIT}"
-  runuser -u financeapp -- git -C "$SOURCE" worktree add --detach "$RELEASE" "$TARGET_COMMIT"
+  git_as_financeapp worktree add --detach "$RELEASE" "$TARGET_COMMIT"
 fi
 
 echo "Installing Python dependencies"
@@ -179,6 +183,6 @@ for candidate in "${candidates[@]}"; do
   fi
   kept=$((kept + 1))
   if (( kept > ${KEEP_RELEASES:-3} )); then
-    git -C "$SOURCE" worktree remove --force "$candidate" 2>/dev/null || rm -rf -- "$candidate"
+    git_as_financeapp worktree remove --force "$candidate" 2>/dev/null || rm -rf -- "$candidate"
   fi
 done
