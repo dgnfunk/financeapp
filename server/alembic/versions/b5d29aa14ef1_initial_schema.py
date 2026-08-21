@@ -8,6 +8,7 @@ Create Date: 2026-08-18 14:30:45.244919
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
@@ -161,4 +162,11 @@ def downgrade() -> None:
     op.drop_table("budgets")
     op.drop_table("audit_events")
     op.drop_table("accounts")
+    if op.get_bind().dialect.name == "postgresql":
+        postgresql.ENUM(name="importstatus", create_type=False).drop(
+            op.get_bind(), checkfirst=True
+        )
+        postgresql.ENUM(name="accountkind", create_type=False).drop(
+            op.get_bind(), checkfirst=True
+        )
     # ### end Alembic commands ###

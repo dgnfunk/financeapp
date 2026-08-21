@@ -192,7 +192,7 @@ def refresh_session(payload: RefreshSessionIn, db: Session = Depends(get_db)) ->
 @app.get("/api/v1/auth/sessions")
 def list_sessions(
     _: Principal = Depends(require_owner), db: Session = Depends(get_db)
-) -> dict:
+) -> list[dict]:
     rows = db.scalars(select(DeviceSession).order_by(DeviceSession.created_at.desc())).all()
     return [
         {
@@ -722,7 +722,7 @@ def confirm_import_simple(
     try:
         transaction = create_simple_transaction(db, payload, actor=principal.actor)
     except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     transaction.source = "import"
     job.status = ImportStatus.confirmed
     db.add(AuditEvent(action="import.confirmed", actor=principal.actor, target_id=str(job.id)))
@@ -749,7 +749,7 @@ def add_transaction(
         db.commit()
         return transaction
     except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
 @app.get("/api/v1/transactions", response_model=list[TransactionOut])
@@ -764,11 +764,13 @@ def list_transactions(
     _: Principal = Depends(require_owner),
     db: Session = Depends(get_db),
 ) -> list[Transaction]:
-    statement = select(Transaction).distinct().order_by(Transaction.occurred_on.desc())
+    statement = select(Transaction).order_by(
+        Transaction.occurred_on.desc(), Transaction.created_at.desc()
+    )
     if not include_system:
         statement = statement.where(Transaction.source != "system")
     if account_id:
-        statement = statement.join(Posting).where(Posting.account_id == account_id)
+        statement = statement.where(Transaction.postings.any(Posting.account_id == account_id))
     if category:
         statement = statement.where(
             or_(Transaction.category == category, Transaction.postings.any(Posting.category == category))
@@ -782,7 +784,7 @@ def list_transactions(
         statement = statement.where(Transaction.occurred_on >= date_from)
     if date_to:
         statement = statement.where(Transaction.occurred_on <= date_to)
-    return list(db.scalars(statement.limit(min(limit, 500))).unique())
+    return list(db.scalars(statement.limit(min(limit, 500))))
 
 
 @app.get("/api/v1/transactions/{transaction_id}", response_model=TransactionOut)
@@ -816,7 +818,7 @@ def add_simple_transaction(
         db.refresh(transaction)
         return transaction
     except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
 @app.patch("/api/v1/transactions/{transaction_id}", response_model=TransactionOut)
@@ -1007,11 +1009,11 @@ def forecast(
     db: Session = Depends(get_db),
 ) -> dict:
     if months not in (3, 6, 12) or scenario not in ("base", "conservative", "custom"):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Unsupported forecast")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Unsupported forecast")
     try:
         return forecast_from_db(db, months, scenario, scenario_id)
     except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
 @app.post("/api/v1/forecasts/scenarios", status_code=201)
@@ -1039,6 +1041,19 @@ def scenario_dict(scenario: ForecastScenario) -> dict:
         "assumptions": scenario.assumptions,
         "updated_at": scenario.updated_at,
     }
+
+
+def validate_linked_account(
+    db: Session, account_id: uuid.UUID | None, field_name: str
+) -> None:
+    if account_id is None:
+        return
+    account = db.get(Account, account_id)
+    if not account or account.is_internal or account.archived_at is not None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"{field_name} must reference an active user account",
+        )
 
 
 @app.get("/api/v1/forecasts/scenarios")
@@ -1095,9 +1110,17 @@ def create_recurring(
     principal: Principal = Depends(require_owner),
     db: Session = Depends(get_db),
 ) -> dict:
+    validate_linked_account(db, payload.account_id, "account_id")
+    validate_linked_account(db, payload.counterparty_account_id, "counterparty_account_id")
     row = RecurringRule(**payload.model_dump())
     db.add(row)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Recurring account reference is invalid"
+        ) from exc
     db.add(AuditEvent(action="recurring.created", actor=principal.actor, target_id=str(row.id)))
     db.commit()
     return recurring_dict(row)
@@ -1124,10 +1147,18 @@ def update_recurring(
     row = db.get(RecurringRule, rule_id)
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Recurring rule not found")
+    validate_linked_account(db, payload.account_id, "account_id")
+    validate_linked_account(db, payload.counterparty_account_id, "counterparty_account_id")
     for key, value in payload.model_dump().items():
         setattr(row, key, value)
     db.add(AuditEvent(action="recurring.updated", actor=principal.actor, target_id=str(row.id)))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Recurring account reference is invalid"
+        ) from exc
     return recurring_dict(row)
 
 
@@ -1151,9 +1182,16 @@ def create_goal(
     principal: Principal = Depends(require_owner),
     db: Session = Depends(get_db),
 ) -> dict:
+    validate_linked_account(db, payload.account_id, "account_id")
     row = SavingsGoal(**payload.model_dump())
     db.add(row)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Goal account reference is invalid"
+        ) from exc
     db.add(AuditEvent(action="goal.created", actor=principal.actor, target_id=str(row.id)))
     db.commit()
     return {column.name: getattr(row, column.name) for column in row.__table__.columns}
@@ -1179,10 +1217,17 @@ def update_goal(
     row = db.get(SavingsGoal, goal_id)
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Goal not found")
+    validate_linked_account(db, payload.account_id, "account_id")
     for key, value in payload.model_dump().items():
         setattr(row, key, value)
     db.add(AuditEvent(action="goal.updated", actor=principal.actor, target_id=str(row.id)))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Goal account reference is invalid"
+        ) from exc
     return {column.name: getattr(row, column.name) for column in row.__table__.columns}
 
 

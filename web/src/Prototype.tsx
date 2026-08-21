@@ -73,6 +73,16 @@ function TransactionGlyph({ kind }: { kind: string }) {
   return <ShoppingCartSimple aria-hidden="true" weight="regular" />;
 }
 
+function PartialDataWarning({ warnings, mobile = false }: { warnings: string[]; mobile?: boolean }) {
+  if (!warnings.length) return null;
+  return (
+    <div className={`partial-data-warning${mobile ? " mobile" : ""}`} role="status">
+      <ShieldCheck aria-hidden="true" />
+      <span><strong>Datos parcialmente disponibles</strong> No se pudo actualizar: {warnings.join(", ")}. Las demás secciones siguen funcionando.</span>
+    </div>
+  );
+}
+
 const money = (value: string | number, currency = "MXN") => new Intl.NumberFormat("es-MX", {
   style: "currency",
   currency,
@@ -355,6 +365,7 @@ export default function Prototype() {
         )}
       </MobileScroll>
 
+      <PartialDataWarning warnings={financeData.warnings} mobile />
       {captureState !== "idle" && <div className={`capture-toast ${captureState}`} role="status">{captureState === "saving" ? "Guardando…" : captureState === "saved" ? "Listo para revisar" : captureState === "file-offline" ? "Conéctate para enviar el archivo; no se almacenó en caché" : "Borrador cifrado; se enviará al reconectar"}</div>}
 
       <nav className="bottom-nav" aria-label="Navegación principal">
@@ -510,6 +521,7 @@ export function DesktopDashboard() {
         </header>
 
         <main className="desktop-main">
+          <PartialDataWarning warnings={data.warnings} />
           <div className="dashboard-toolbar">
             <div className="demo-source"><ShieldCheck weight="fill" /> PostgreSQL local <span>· {data.summary.freshness ? `Último movimiento ${new Intl.DateTimeFormat("es-MX", { dateStyle: "short", timeStyle: "short" }).format(new Date(data.summary.freshness))}` : "Sin movimientos todavía"}</span></div>
             <div className="dashboard-filters">

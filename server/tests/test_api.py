@@ -6,6 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
+from app.config import settings
 from app.db import Base, get_db
 from app.main import app
 
@@ -27,7 +28,7 @@ def client() -> TestClient:
 
 
 def owner_headers() -> dict[str, str]:
-    return {"Authorization": "Bearer change-me-before-first-use"}
+    return {"Authorization": f"Bearer {settings.master_token}"}
 
 
 def test_account_budget_transaction_and_analytics_flow() -> None:
@@ -90,7 +91,7 @@ def test_bootstrap_refresh_and_session_revocation() -> None:
     web = client()
     bootstrap = web.post(
         "/api/v1/auth/bootstrap",
-        json={"master_token": "change-me-before-first-use", "device_label": "Test"},
+        json={"master_token": settings.master_token, "device_label": "Test"},
     )
     assert bootstrap.status_code == 200, bootstrap.text
     body = bootstrap.json()
