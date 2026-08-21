@@ -1,3 +1,5 @@
+import { createRequestId } from "./requestId";
+
 export type AccountKind = "cash" | "debit" | "savings" | "credit" | "debt" | "investment";
 
 export type Account = {
@@ -119,7 +121,7 @@ async function rawRequest<T>(path: string, options: RequestInit = {}): Promise<T
   if (currentToken) headers.set("Authorization", `Bearer ${currentToken}`);
   if (options.body && !(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
   if (options.method && options.method !== "GET" && !headers.has("Idempotency-Key")) {
-    headers.set("Idempotency-Key", crypto.randomUUID());
+    headers.set("Idempotency-Key", createRequestId());
   }
   const response = await fetch(`${API_URL}${path}`, { ...options, headers });
   if (!response.ok) {
