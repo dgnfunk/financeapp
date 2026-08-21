@@ -308,6 +308,7 @@ restart_stack
 health_check
 install -m 0755 "$RELEASE/ops/proxmox/update.sh" /usr/local/sbin/financeapp-update
 install -m 0755 "$RELEASE/ops/proxmox/configure-tailscale.sh" /usr/local/sbin/financeapp-configure-tailscale
+install -m 0755 "$RELEASE/ops/proxmox/configure-lan.sh" /usr/local/sbin/financeapp-configure-lan
 install -m 0755 "$RELEASE/ops/proxmox/backup.sh" /usr/local/sbin/financeapp-backup
 trap - ERR
 

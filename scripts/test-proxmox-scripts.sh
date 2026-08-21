@@ -7,7 +7,8 @@ INSTALL="$ROOT/ops/proxmox/install.sh"
 UPDATE="$ROOT/ops/proxmox/update.sh"
 BACKUP="$ROOT/ops/proxmox/backup.sh"
 TAILSCALE="$ROOT/ops/proxmox/configure-tailscale.sh"
-SCRIPTS=("$LXC" "$INSTALL" "$UPDATE" "$BACKUP" "$TAILSCALE")
+LAN="$ROOT/ops/proxmox/configure-lan.sh"
+SCRIPTS=("$LXC" "$INSTALL" "$UPDATE" "$BACKUP" "$TAILSCALE" "$LAN")
 
 fail() {
   echo "[FAIL] $*" >&2
@@ -108,6 +109,22 @@ set_postgres_config_value password_encryption \"'scram-sha-256'\""
 reject_text "$CONFIG_TEST_FILE" "listen_addresses = 127.0.0.1" "the invalid unquoted IPv4 value survived normalization"
 reject_text "$CONFIG_TEST_FILE" "'''" "double-quoted PostgreSQL literals survived normalization"
 
+LAN_DETECT_FUNCTION="$(awk '/^detect_lan_ip\(\)/ {capture=1} capture {print} capture && $0 == "}" {exit}' "$LAN")"
+LAN_VALIDATE_FUNCTION="$(awk '/^validate_lan_ip\(\)/ {capture=1} capture {print} capture && $0 == "}" {exit}' "$LAN")"
+LAN_TEST_IP=192.0.2.10
+LAN_DETECTED="$(bash -c "${LAN_DETECT_FUNCTION}
+ip() { printf '%s\\n' '2: eth0 inet ${LAN_TEST_IP}/24 scope global eth0'; }
+detect_lan_ip")"
+[[ "$LAN_DETECTED" == "$LAN_TEST_IP" ]] || fail "LAN access did not detect the eth0 IPv4 address"
+bash -c "${LAN_VALIDATE_FUNCTION}
+ip() { printf '%s\\n' '2: eth0 inet ${LAN_TEST_IP}/24 scope global eth0'; }
+validate_lan_ip '${LAN_TEST_IP}'"
+if bash -c "${LAN_VALIDATE_FUNCTION}
+ip() { printf '%s\\n' '2: eth0 inet ${LAN_TEST_IP}/24 scope global eth0'; }
+validate_lan_ip '192.0.2.11'" >/dev/null 2>&1; then
+  fail "LAN access accepted an IPv4 address that is not assigned to eth0"
+fi
+
 # Literal source-code invariants intentionally use single-quoted shell strings.
 # shellcheck disable=SC2016
 require_text "$LXC" 'REUSE_SAVED_CONFIG="${REUSE_SAVED_CONFIG:-yes}"' "resume must reuse saved configuration by default"
@@ -162,6 +179,20 @@ require_order "$UPDATE" 'health_check' 'install -m 0755 "$RELEASE/ops/proxmox/up
 # shellcheck disable=SC2016
 require_text "$TAILSCALE" 'curl -fsS "${ORIGIN}/api/v1/health"' "Tailscale configuration must verify the public tailnet origin"
 require_text "$INSTALL" 'listen 127.0.0.1:80;' "Nginx must remain private to the LXC"
+require_text "$INSTALL" 'include /etc/nginx/financeapp-listeners.conf;' "Nginx must load the optional managed LAN listener"
+require_text "$INSTALL" 'configure-lan.sh /usr/local/sbin/financeapp-configure-lan' "fresh installations must install the LAN access command"
+require_text "$UPDATE" 'configure-lan.sh" /usr/local/sbin/financeapp-configure-lan' "updates must install the LAN access command"
+require_text "$TAILSCALE" '--lan-enable' "the first upgraded release must expose the LAN compatibility dispatcher"
+# shellcheck disable=SC2016
+require_text "$LAN" 'install -m 0755 "${BASH_SOURCE[0]}" /usr/local/sbin/financeapp-configure-lan' "the compatibility path must install the friendly LAN command"
+require_text "$LAN" 'ip -4 -o addr show dev eth0 scope global' "LAN access must bind an address assigned to eth0"
+# shellcheck disable=SC2016
+require_text "$LAN" 'printf '\''listen %s:80;\n'\'' "$LAN_IP"' "LAN access must use a specific IPv4 listener"
+reject_text "$LAN" 'listen 0.0.0.0' "LAN access must not bind every container interface"
+# shellcheck disable=SC2016
+require_text "$LAN" 'curl -fsS "http://${LAN_IP}/api/v1/health"' "LAN access must verify the exposed origin"
+# shellcheck disable=SC2016
+require_text "$LAN" 'install -o root -g root -m 0644 /dev/null "$LAN_LISTENERS"' "LAN access must support reversible disablement"
 # shellcheck disable=SC2016
 require_text "$BACKUP" 'PG_DUMP_BIN="${PG_BIN_DIR}/pg_dump"' "backups must use the versioned pg_dump binary"
 # shellcheck disable=SC2016

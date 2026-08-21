@@ -2,6 +2,23 @@
 set -Eeuo pipefail
 
 [[ $EUID -eq 0 ]] || { echo "Run as root" >&2; exit 1; }
+
+# Compatibility dispatcher: an older updater always refreshes this command,
+# so the first release containing LAN support can enable it without requiring
+# a second forced deployment to install the new friendly command.
+case "${1:-}" in
+  --lan-enable)
+    shift
+    exec /opt/financeapp/current/ops/proxmox/configure-lan.sh enable "$@"
+    ;;
+  --lan-disable)
+    exec /opt/financeapp/current/ops/proxmox/configure-lan.sh disable
+    ;;
+  --lan-status)
+    exec /opt/financeapp/current/ops/proxmox/configure-lan.sh status
+    ;;
+esac
+
 command -v tailscale >/dev/null || { echo "Tailscale is not installed" >&2; exit 1; }
 tailscale status >/dev/null 2>&1 || {
   echo "This LXC is not connected to Tailscale. Run: tailscale up" >&2

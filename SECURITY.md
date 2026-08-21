@@ -2,7 +2,9 @@
 
 ## Límites de confianza
 
-- El navegador confía únicamente en la API publicada por Tailscale Serve mediante HTTPS.
+- La ruta recomendada publica la API mediante Tailscale Serve y HTTPS. El
+  administrador puede habilitar explícitamente HTTP en la IPv4 de `eth0` para
+  una LAN doméstica de confianza; esa excepción no debe reenviarse a Internet.
 - PostgreSQL, Redis, workers y Ollama viven en una red interna de Docker sin puertos públicos.
 - Los Atajos reciben tokens de escritura limitada; no pueden consultar saldos ni modificar movimientos.
 - PDF, XML, CSV, imágenes y texto OCR son entrada hostil. No se ejecutan y no se convierten en instrucciones del modelo.
@@ -34,8 +36,10 @@ Antes de usar la aplicación como única copia, realiza una restauración comple
 
 ## Proxmox LXC
 
-El despliegue LXC es no privilegiado; Nginx y PostgreSQL escuchan únicamente en
-loopback y Tailscale Serve termina HTTPS dentro del tailnet. La contraseña
+El despliegue LXC es no privilegiado; PostgreSQL, Redis y la API interna
+escuchan únicamente en loopback y Tailscale Serve termina HTTPS dentro del
+tailnet. Nginx conserva loopback y puede añadir de forma explícita y reversible
+un listener HTTP limitado a la IPv4 de `eth0`. La contraseña
 PostgreSQL generada queda en `/etc/financeapp/postgres.env` con permisos `0600`,
 mientras que el entorno de la API usa `0640`. Cada actualización y el timer
 diario crean dumps verificados, pero estos no sustituyen un respaldo Proxmox o

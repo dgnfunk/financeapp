@@ -144,6 +144,44 @@ El último comando detecta el nombre MagicDNS, configura WebAuthn y publica `htt
 Si se instala con `ENABLE_TAILSCALE=no`, Nginx continúa escuchando únicamente en
 loopback: el script no expone automáticamente un puerto inseguro en la LAN.
 
+## Acceso opcional desde la red local
+
+Para consultar FinanceApp por la IP del LXC dentro de una red doméstica de
+confianza, habilita un listener HTTP explícito. El comando detecta únicamente
+la IPv4 asignada a `eth0`; nunca escucha en `0.0.0.0`, y PostgreSQL, Redis y el
+puerto interno de la API permanecen en loopback.
+
+En la primera actualización que incorpora esta función, usa el dispatcher de
+compatibilidad que el actualizador existente sí reemplaza automáticamente:
+
+```sh
+financeapp-update
+financeapp-configure-tailscale --lan-enable
+```
+
+El segundo comando imprime la dirección HTTP correspondiente a la IPv4 actual
+del LXC. En instalaciones nuevas o después de una actualización posterior
+también está disponible el nombre directo:
+
+```sh
+financeapp-configure-lan enable
+financeapp-configure-lan status
+financeapp-configure-lan disable
+```
+
+`enable` también acepta como argumento una dirección IPv4 que ya pertenezca a
+`eth0`.
+
+Si DHCP cambia la IP, ejecuta nuevamente `enable`; lo ideal es reservar la IP
+en el router. Si el firewall de Proxmox está activo, permite TCP 80 hacia el LXC
+solo desde la subred doméstica. Nunca reenvíes ese puerto en el router.
+
+El acceso por IP utiliza HTTP: permite las funciones financieras normales y el
+inicio con token, pero WebAuthn/passkeys, service workers y la instalación PWA
+requieren un contexto HTTPS. Para esas funciones sigue usando la dirección de
+Tailscale, incluso dentro de casa. Un nombre DNS local con certificado confiable
+puede añadirse posteriormente para obtener HTTPS completo en la LAN.
+
 ## Actualizaciones
 
 Dentro del LXC:

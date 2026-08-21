@@ -14,7 +14,9 @@ Esta entrega deja un MVP ejecutable con:
 - Parser determinista de XML CFDI y CSV; extracción de texto de PDF; OCR local opcional con RapidOCR.
 - Documentos originales cifrados con AES-256-GCM y deduplicación por SHA-256.
 - Tokens independientes y revocables para Atajos de iOS, limitados a `capture:create`.
-- PostgreSQL, migraciones Alembic, Redis, worker serial, Ollama opcional y publicación exclusiva en loopback para Tailscale Serve.
+- PostgreSQL, migraciones Alembic, Redis, worker serial, Ollama opcional y
+  publicación HTTPS mediante Tailscale Serve; Nginx puede habilitar de forma
+  explícita un listener HTTP limitado a la IPv4 doméstica de `eth0`.
 - Passkeys WebAuthn, códigos de recuperación, sesiones cortas, refresh rotatorio y revocación por dispositivo.
 - Pruebas unitarias y de API del libro mayor, archivos, CFDI/CSV, cuentas, presupuesto, sesiones y proyecciones.
 
@@ -95,6 +97,11 @@ Consulta [SECURITY.md](./SECURITY.md), [Atajos de iOS](./docs/ios-shortcuts.md) 
 Para una instalación dedicada y actualizable en Proxmox, usa el instalador Debian 13 de [`ops/proxmox/financeapp-lxc.sh`](./ops/proxmox/financeapp-lxc.sh). Cada LXC ejecuta PostgreSQL 17 local, PWA, API, Redis y worker sin depender de otra instancia de base de datos.
 
 El comando `financeapp-update` obtiene el último commit o una versión concreta, construye una release paralela, crea un dump PostgreSQL, ejecuta Alembic, cambia la release activa y realiza un health check. Consulta la [guía completa de Proxmox](./docs/proxmox-lxc.md).
+
+Para acceso opcional por IP dentro de una LAN doméstica confiable, ejecuta
+`financeapp-configure-lan enable`. Solo Nginx abre TCP 80 en la IPv4 de `eth0`;
+PostgreSQL, Redis y la API interna permanecen en loopback. No reenvíes ese
+puerto en el router y conserva Tailscale HTTPS para passkeys y la PWA completa.
 
 Antes de publicar o hacer push, ejecuta `scripts/security-check.sh`. Revisa el árbol con Gitleaks, rechaza IPs privadas, rutas personales y archivos sensibles, y también inspecciona el historial cuando ya exista un repositorio Git.
 
