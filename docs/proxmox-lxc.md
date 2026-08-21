@@ -113,11 +113,11 @@ pg_lsclusters
 journalctl -u postgresql@17-main.service --no-pager -n 100
 ```
 
-Cada reanudación vuelve a aplicar `listen_addresses = '127.0.0.1'` y
-`password_encryption = 'scram-sha-256'` con sintaxis válida de PostgreSQL, y
-hace que el propio servidor analice ambos valores antes de arrancar. Esto
-repara automáticamente configuraciones incompletas escritas por versiones
-anteriores del instalador.
+Cada reanudación normaliza a una sola entrada exacta
+`listen_addresses = '127.0.0.1'` y
+`password_encryption = 'scram-sha-256'`, eliminando variantes inválidas
+anteriores. Después hace que el propio servidor analice ambos valores antes de
+arrancar.
 
 El build PWA es obligatorio porque Git conserva el código React/TypeScript y
 excluye `dist/`; Nginx necesita los assets de producción generados en

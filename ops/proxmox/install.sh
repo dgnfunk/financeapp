@@ -119,12 +119,32 @@ touch "$POSTGRES_READY"
 
 POSTGRES_PASSWORD="$(printf '%s' "$POSTGRES_PASSWORD_B64" | base64 -d)"
 [[ -n "$POSTGRES_PASSWORD" ]] || { echo "Local PostgreSQL password is empty" >&2; exit 1; }
-# pg_conftool writes the value verbatim. PostgreSQL string and enum values must
-# therefore retain their SQL quotes inside the argument.
-pg_conftool "$POSTGRES_MAJOR" main set listen_addresses "'127.0.0.1'"
-pg_conftool "$POSTGRES_MAJOR" main set password_encryption "'scram-sha-256'"
 POSTGRES_CONFIG="/etc/postgresql/${POSTGRES_MAJOR}/main/postgresql.conf"
 POSTGRES_DATA="/var/lib/postgresql/${POSTGRES_MAJOR}/main"
+set_postgres_config_value() {
+  local setting="$1" literal="$2" temporary
+  temporary="$(mktemp "${POSTGRES_CONFIG}.financeapp.XXXXXX")"
+  awk -v key="$setting" -v replacement="${setting} = ${literal}" '
+    BEGIN {
+      pattern = "^[[:space:]]*#?[[:space:]]*" key "[[:space:]]*="
+      replaced = 0
+    }
+    $0 ~ pattern {
+      if (!replaced) print replacement
+      replaced = 1
+      next
+    }
+    { print }
+    END { if (!replaced) print replacement }
+  ' "$POSTGRES_CONFIG" >"$temporary"
+  chown --reference="$POSTGRES_CONFIG" "$temporary"
+  chmod --reference="$POSTGRES_CONFIG" "$temporary"
+  mv "$temporary" "$POSTGRES_CONFIG"
+}
+# pg_conftool misclassifies a numeric IPv4 address as an unquoted number and
+# re-quotes already quoted input. Write the two fixed literals exactly instead.
+set_postgres_config_value listen_addresses "'127.0.0.1'"
+set_postgres_config_value password_encryption "'scram-sha-256'"
 validate_postgres_setting() {
   local setting="$1" expected="$2" actual
   if ! actual="$(runuser -u postgres -- "$PG_BIN_DIR/postgres" \
