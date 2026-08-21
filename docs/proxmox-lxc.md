@@ -1,13 +1,12 @@
 # Despliegue en Proxmox LXC
 
-Este despliegue crea un contenedor Debian 13 no privilegiado dedicado a FinanceApp. PostgreSQL permanece en una instancia externa indicada durante la instalación; dentro del LXC se instalan la API, PWA, Nginx, Redis y el worker de documentos.
+Este despliegue crea un contenedor Debian 13 no privilegiado y autocontenido para
+FinanceApp. Dentro del LXC se instalan PostgreSQL 17, API, PWA, Nginx, Redis y
+el worker de documentos. PostgreSQL escucha exclusivamente en loopback.
 
 ## Requisitos
 
-- Proxmox VE con acceso a una plantilla Debian 13. Si se usa DHCP, reserva la
-  dirección del LXC para que la regla `/32` de PostgreSQL no deje de funcionar.
-- Una base y un rol dedicados existentes en PostgreSQL; sus nombres se solicitan durante la instalación.
-- `pg_hba.conf` debe permitir el IP que recibirá el LXC, preferiblemente como `/32`.
+- Proxmox VE con acceso a una plantilla Debian 13.
 - Repositorio público de GitHub que contenga este proyecto.
 - Tailscale con MagicDNS y HTTPS habilitado en el tailnet.
 
@@ -41,11 +40,11 @@ FINANCEAPP_REPO_URL=https://github.com/USUARIO/financeapp.git \
   bash -c "$(curl -fsSL https://raw.githubusercontent.com/USUARIO/financeapp/main/ops/proxmox/financeapp-lxc.sh)"
 ```
 
-El instalador solicitará los recursos del contenedor, la contraseña del rol
-PostgreSQL y el modo TLS. `prefer` conserva compatibilidad; usa
-`DB_SSLMODE=require` cuando el servidor PostgreSQL tenga TLS configurado. La
-contraseña solo se transporta mediante archivos temporales con permisos `0600`;
-no se incluye en argumentos de procesos ni en el repositorio.
+El instalador solo solicita recursos del contenedor. Crea automáticamente la
+base `financeapp`, el rol `financeapp_app` y una contraseña aleatoria. Esas
+credenciales permanecen dentro del LXC en archivos `0600/0640`; no aparecen en
+la terminal, los argumentos de procesos ni el repositorio. Pueden cambiarse los
+nombres con `POSTGRES_DB` y `POSTGRES_USER` antes de la primera instalación.
 
 Como no se configura una contraseña root del sistema, la consola de Proxmox
 inicia sesión automáticamente como root, igual que los Community Scripts. Esto
@@ -91,11 +90,16 @@ paquetes aunque su commit sea distinto.
 
 Mientras una instalación no finalice, `/root/financeapp-install.env` permanece
 dentro del LXC con modo `0600`. Una reanudación lo reutiliza por defecto y omite
-las preguntas de PostgreSQL y la regeneración de claves. Para descartarlo de
+la regeneración de claves. Para descartarlo de
 forma explícita puede usarse `REUSE_SAVED_CONFIG=no`. El archivo se elimina
 automáticamente únicamente después de una instalación exitosa.
 El repositorio y la rama guardados deben coincidir con el instalador usado para
 reanudar; una discrepancia se rechaza antes de continuar.
+
+El instalador también recupera CT 106 y otras instalaciones afectadas por el
+antiguo falso positivo: si el archivo temporal ya no existe, conserva
+`MASTER_TOKEN` y `DOCUMENT_KEY_B64` desde `/etc/financeapp`, genera credenciales
+para una base PostgreSQL local nueva y no vuelve a contactar la base externa.
 
 El build PWA es obligatorio porque Git conserva el código React/TypeScript y
 excluye `dist/`; Nginx necesita los assets de producción generados en
@@ -135,7 +139,8 @@ El actualizador:
 
 1. descarga el último commit de `main`;
 2. crea y compila una release separada;
-3. prueba la conexión PostgreSQL;
+3. comprueba que servidor, `psql`, `pg_dump` y `pg_restore` pertenecen a
+   PostgreSQL 17;
 4. crea `/var/backups/financeapp/pre-update-*.dump`;
 5. detiene API y worker;
 6. ejecuta Alembic;
@@ -181,13 +186,24 @@ Archivos importantes:
 - `/opt/financeapp/current`: release activa.
 - `/opt/financeapp/previous`: release anterior.
 - `/var/lib/financeapp/documents`: originales cifrados.
-- `/var/backups/financeapp`: dumps anteriores a cada actualización.
+- `/var/lib/postgresql`: datos del servidor PostgreSQL local.
+- `/var/backups/financeapp`: dumps de actualización y backups diarios.
+
+Los dumps y sus directorios pertenecen exclusivamente a `root` (`0600/0700`);
+el usuario que ejecuta la API no puede leerlos ni sustituirlos.
 
 Antes de compilar, el actualizador exige espacio para el piso configurado más el
 tamaño actual de PostgreSQL. Los valores `KEEP_RELEASES`, `KEEP_BACKUPS` y
 `MIN_FREE_DISK_MB` se pueden ajustar en `/etc/financeapp/deploy.conf`.
 
-Para cambiar la contraseña PostgreSQL, actualiza de manera consistente `DATABASE_URL` en `financeapp.env` y `PGPASSWORD` en `postgres.env`, prueba con `financeapp-update --check` y reinicia la API/worker.
+`financeapp-backup` crea manualmente un dump verificado. El timer
+`financeapp-backup.timer` lo ejecuta diariamente y conserva los siete más
+recientes:
+
+```sh
+systemctl list-timers financeapp-backup.timer
+financeapp-backup
+```
 
 ## Respaldo completo
 
@@ -195,6 +211,7 @@ El dump previo a una actualización no sustituye el respaldo operativo. Incluye 
 
 - `/etc/financeapp`;
 - `/var/lib/financeapp`;
+- `/var/lib/postgresql`;
 - `/var/backups/financeapp`.
 
 La clave `DOCUMENT_KEY_B64` es necesaria para recuperar documentos cifrados.

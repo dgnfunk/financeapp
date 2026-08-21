@@ -124,8 +124,8 @@ No fue posible ejecutar contenedores ni una migración contra PostgreSQL real po
 
 ### Decisiones confirmadas
 
-- El despliegue objetivo es un LXC Debian 13 no privilegiado; PostgreSQL queda
-  externo y Redis, Nginx, API, worker y PWA viven dentro del LXC.
+- El despliegue objetivo es un LXC Debian 13 no privilegiado y autocontenido;
+  PostgreSQL 17, Redis, Nginx, API, worker y PWA viven dentro del mismo LXC.
 - La plantilla debe coincidir con la arquitectura del host. Debian 13 usa
   `nesting=1,keyctl=1`; Tailscale recibe `/dev/net/tun` sin publicar puertos del
   contenedor.
@@ -160,9 +160,12 @@ No fue posible ejecutar contenedores ni una migración contra PostgreSQL real po
 - El actualizador valida RAM, espacio libre, tamaño de la base, PostgreSQL,
   Redis y los cuatro servicios antes de aceptar una release. Releases y dumps
   tienen retención acotada; `--force` construye en un worktree paralelo.
-- PostgreSQL admite `prefer`, `require` y `verify-full` mediante
-  `DB_SSLMODE`. El acceso web continúa limitado a loopback aunque Tailscale se
-  desactive.
+- PostgreSQL y su cliente quedan fijados a la versión mayor 17 de Debian 13,
+  escuchan solo en loopback y usan credenciales SCRAM generadas por nodo. El
+  acceso web también continúa limitado a loopback aunque Tailscale se desactive.
+- Un timer crea dumps diarios verificados con retención de siete copias. Las
+  rutas de PostgreSQL, documentos, configuración y dumps deben incluirse en el
+  respaldo externo del LXC.
 
 ### Evidencia operativa actual
 
@@ -170,7 +173,7 @@ No fue posible ejecutar contenedores ni una migración contra PostgreSQL real po
 |---|---|---|
 | Creación LXC amd64 | Implementado y confirmado | El usuario confirmó que CT 106 inicia con plantilla amd64. |
 | Bootstrap Debian/Tailscale | Implementado y confirmado parcialmente | Paquetes base y Tailscale 1.102.3 se instalaron dentro de CT 106. |
-| Conexión PostgreSQL | Implementado y confirmado | La instalación superó la comprobación `psql` contra la instancia externa. |
+| PostgreSQL local | Implementado en código; validación en CT pendiente | PostgreSQL 17 local reemplaza la dependencia externa; CT 106 usará una base nueva. |
 | Build backend Python | Implementado y confirmado | `finanzas-api` creó e instaló su wheel dentro de CT 106. |
 | Permisos Node/npm | Corregido en código; sin verificar en CT | El último intento falló al ejecutar npm como `financeapp`; ahora el árbol Node recibe permisos `a+rX` y npm se valida con ese usuario. |
 | Reanudación sin preguntas | Implementado en código; sin verificar en CT | Reutiliza el archivo `0600` dejado por el intento fallido. |
@@ -180,10 +183,10 @@ No fue posible ejecutar contenedores ni una migración contra PostgreSQL real po
 
 ### Próximo trabajo priorizado
 
-1. **Ahora:** publicar los cambios del instalador y reanudar CT 106 sin volver a
-   introducir credenciales.
-2. **Ahora:** confirmar que se reutiliza el entorno Python, que npm se ejecuta
-   como `financeapp` y que se genera `web/dist/client/index.html`.
-3. **Ahora:** verificar migración Alembic, servicios systemd y health check.
-4. **Siguiente:** ejecutar `tailscale up` y configurar el hostname HTTPS antes
+1. **Ahora:** publicar el instalador autocontenido y reanudar CT 106; debe
+   recuperar las claves existentes y crear PostgreSQL 17 local sin contactar la
+   base externa.
+2. **Ahora:** verificar dump/restore, migración Alembic, timer diario, servicios
+   systemd y health check.
+3. **Siguiente:** ejecutar `tailscale up` y configurar el hostname HTTPS antes
    de validar passkeys y acceso PWA desde iPhone.

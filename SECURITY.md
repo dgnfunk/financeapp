@@ -34,4 +34,9 @@ Antes de usar la aplicación como única copia, realiza una restauración comple
 
 ## Proxmox LXC
 
-El despliegue LXC es no privilegiado y Nginx escucha únicamente en loopback; Tailscale Serve termina HTTPS dentro del tailnet. La contraseña PostgreSQL queda en `/etc/financeapp/postgres.env` con permisos `0600`, mientras que el entorno de la API usa `0640`. Autoriza en `pg_hba.conf` únicamente el IP `/32` del LXC y no toda la VLAN. Cada actualización crea un dump previo, pero este no sustituye un respaldo restic fuera del contenedor.
+El despliegue LXC es no privilegiado; Nginx y PostgreSQL escuchan únicamente en
+loopback y Tailscale Serve termina HTTPS dentro del tailnet. La contraseña
+PostgreSQL generada queda en `/etc/financeapp/postgres.env` con permisos `0600`,
+mientras que el entorno de la API usa `0640`. Cada actualización y el timer
+diario crean dumps verificados, pero estos no sustituyen un respaldo Proxmox o
+restic fuera del contenedor.

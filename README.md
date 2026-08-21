@@ -92,7 +92,7 @@ Consulta [SECURITY.md](./SECURITY.md), [Atajos de iOS](./docs/ios-shortcuts.md) 
 
 ## Proxmox LXC
 
-Para una instalación dedicada y actualizable en Proxmox, usa el instalador Debian 13 de [`ops/proxmox/financeapp-lxc.sh`](./ops/proxmox/financeapp-lxc.sh). El LXC ejecuta PWA, API, Redis y worker; PostgreSQL puede permanecer en cualquier instancia externa accesible desde el contenedor.
+Para una instalación dedicada y actualizable en Proxmox, usa el instalador Debian 13 de [`ops/proxmox/financeapp-lxc.sh`](./ops/proxmox/financeapp-lxc.sh). Cada LXC ejecuta PostgreSQL 17 local, PWA, API, Redis y worker sin depender de otra instancia de base de datos.
 
 El comando `financeapp-update` obtiene el último commit o una versión concreta, construye una release paralela, crea un dump PostgreSQL, ejecuta Alembic, cambia la release activa y realiza un health check. Consulta la [guía completa de Proxmox](./docs/proxmox-lxc.md).
 

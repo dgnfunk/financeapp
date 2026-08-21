@@ -49,21 +49,38 @@ source "$DEPLOY_CONFIG"
 source "$APP_ENV"
 # shellcheck disable=SC1090
 source "$POSTGRES_ENV"
-PGSSLMODE="${PGSSLMODE:-prefer}"
+PGSSLMODE="${PGSSLMODE:-disable}"
 export PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD
 export PGSSLMODE
+PG_DUMP_BIN="${PG_BIN_DIR}/pg_dump"
+PG_RESTORE_BIN="${PG_BIN_DIR}/pg_restore"
+PSQL_BIN="${PG_BIN_DIR}/psql"
 exec 9>"$LOCK"
 flock -n 9 || { echo "Another FinanceApp update is running" >&2; exit 1; }
 
-for required_command in curl df flock git jq pg_dump pg_restore psql redis-cli runuser systemctl; do
+for required_command in curl df flock git jq redis-cli runuser systemctl; do
   command -v "$required_command" >/dev/null || { echo "Missing required command: ${required_command}" >&2; exit 1; }
 done
+for postgres_binary in "$PG_DUMP_BIN" "$PG_RESTORE_BIN" "$PSQL_BIN"; do
+  [[ -x "$postgres_binary" ]] || { echo "Missing PostgreSQL ${POSTGRES_MAJOR} binary: ${postgres_binary}" >&2; exit 1; }
+done
+
+verify_postgres_versions() {
+  local server_version_num server_major dump_major
+  server_version_num="$("$PSQL_BIN" -v ON_ERROR_STOP=1 -Atc 'show server_version_num')"
+  server_major=$((server_version_num / 10000))
+  dump_major="$("$PG_DUMP_BIN" --version | awk '{split($3, version, "."); print version[1]}')"
+  [[ "$server_major" == "$POSTGRES_MAJOR" && "$dump_major" == "$POSTGRES_MAJOR" ]] || {
+    echo "PostgreSQL backup version mismatch: configured=${POSTGRES_MAJOR}, server=${server_major}, pg_dump=${dump_major}" >&2
+    return 1
+  }
+}
 
 health_check() {
-  psql -v ON_ERROR_STOP=1 -Atc 'select 1' >/dev/null
+  "$PSQL_BIN" -v ON_ERROR_STOP=1 -Atc 'select 1' >/dev/null
   [[ "$(redis-cli ping 2>/dev/null)" == "PONG" ]]
   for _ in {1..30}; do
-    if systemctl is-active --quiet redis-server nginx financeapp-api financeapp-worker &&
+    if systemctl is-active --quiet postgresql redis-server nginx financeapp-api financeapp-worker &&
       curl -fsS http://127.0.0.1/api/v1/health | jq -e '.status == "ok"' >/dev/null; then
       return 0
     fi
@@ -156,7 +173,8 @@ if [[ ! -d "$RELEASE" ]]; then
   git_as_financeapp worktree add --detach "$RELEASE" "$TARGET_COMMIT"
 fi
 
-DATABASE_BYTES="$(psql -v ON_ERROR_STOP=1 -Atc 'select pg_database_size(current_database())')"
+verify_postgres_versions
+DATABASE_BYTES="$("$PSQL_BIN" -v ON_ERROR_STOP=1 -Atc 'select pg_database_size(current_database())')"
 FREE_DISK_MB="$(df -Pm "$RELEASES" | awk 'NR == 2 {print $4}')"
 REQUIRED_DISK_MB=$(( ${MIN_FREE_DISK_MB:-2048} + DATABASE_BYTES / 1024 / 1024 ))
 (( FREE_DISK_MB >= REQUIRED_DISK_MB )) || {
@@ -238,7 +256,7 @@ update_failed() {
     restart_stack || true
     health_check || echo "Previous application release is not healthy; the database migration may require manual recovery." >&2
   fi
-  if [[ -s "$BACKUP" ]] && pg_restore --list "$BACKUP" >/dev/null 2>&1; then
+  if [[ -s "$BACKUP" ]] && "$PG_RESTORE_BIN" --list "$BACKUP" >/dev/null 2>&1; then
     echo "Database backup: ${BACKUP}" >&2
   else
     rm -f -- "$BACKUP"
@@ -250,10 +268,10 @@ trap update_failed ERR
 
 systemctl stop financeapp-worker financeapp-api 2>/dev/null || true
 echo "Creating PostgreSQL backup at ${BACKUP}"
-pg_dump --format=custom --no-owner --file="$BACKUP"
-pg_restore --list "$BACKUP" >/dev/null
-chmod 0640 "$BACKUP"
-chown root:financeapp "$BACKUP"
+"$PG_DUMP_BIN" --format=custom --no-owner --file="$BACKUP"
+"$PG_RESTORE_BIN" --list "$BACKUP" >/dev/null
+chmod 0600 "$BACKUP"
+chown root:root "$BACKUP"
 
 echo "Applying database migrations"
 runuser -u financeapp -- env "DATABASE_URL=${DATABASE_URL}" "PYTHONPATH=${RELEASE}/server" \
@@ -268,6 +286,7 @@ restart_stack
 health_check
 install -m 0755 "$RELEASE/ops/proxmox/update.sh" /usr/local/sbin/financeapp-update
 install -m 0755 "$RELEASE/ops/proxmox/configure-tailscale.sh" /usr/local/sbin/financeapp-configure-tailscale
+install -m 0755 "$RELEASE/ops/proxmox/backup.sh" /usr/local/sbin/financeapp-backup
 trap - ERR
 
 echo "FinanceApp is healthy at ${TARGET_COMMIT}."

@@ -11,18 +11,22 @@ source "$CONFIG_PATH"
 
 : "${FINANCEAPP_REPO_URL:?Missing FINANCEAPP_REPO_URL}"
 : "${FINANCEAPP_BRANCH:?Missing FINANCEAPP_BRANCH}"
-: "${DB_HOST:?Missing DB_HOST}"
-: "${DB_PORT:?Missing DB_PORT}"
-: "${DB_NAME:?Missing DB_NAME}"
-: "${DB_USER:?Missing DB_USER}"
-: "${DB_PASSWORD_B64:?Missing DB_PASSWORD_B64}"
+: "${POSTGRES_DB:?Missing POSTGRES_DB}"
+: "${POSTGRES_USER:?Missing POSTGRES_USER}"
+: "${POSTGRES_PASSWORD_B64:?Missing POSTGRES_PASSWORD_B64}"
 : "${MASTER_TOKEN:?Missing MASTER_TOKEN}"
 : "${DOCUMENT_KEY_B64:?Missing DOCUMENT_KEY_B64}"
-DB_SSLMODE="${DB_SSLMODE:-prefer}"
-[[ "$DB_SSLMODE" == "prefer" || "$DB_SSLMODE" == "require" || "$DB_SSLMODE" == "verify-full" ]] || {
-  echo "Unsupported PostgreSQL SSL mode: ${DB_SSLMODE}" >&2
+[[ "${CONFIG_VERSION:-}" == "2" ]] || { echo "Unsupported installer configuration version" >&2; exit 1; }
+[[ "$POSTGRES_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { echo "Invalid POSTGRES_DB" >&2; exit 1; }
+[[ "$POSTGRES_USER" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { echo "Invalid POSTGRES_USER" >&2; exit 1; }
+[[ "$POSTGRES_USER" != "postgres" ]] || { echo "POSTGRES_USER cannot be postgres" >&2; exit 1; }
+[[ "$POSTGRES_USER" != pg_* ]] || { echo "POSTGRES_USER cannot use the reserved pg_ prefix" >&2; exit 1; }
+[[ "$POSTGRES_DB" != "postgres" && "$POSTGRES_DB" != "template0" && "$POSTGRES_DB" != "template1" ]] || {
+  echo "POSTGRES_DB uses a reserved name" >&2
   exit 1
 }
+POSTGRES_MAJOR=17
+PG_BIN_DIR="/usr/lib/postgresql/${POSTGRES_MAJOR}/bin"
 
 MEMORY_MB="$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)"
 MIN_MEMORY_MB=1800
@@ -69,20 +73,64 @@ if [[ ! -f "$TAILSCALE_READY" ]]; then
   fi
 fi
 
-BASE_READY="${INSTALL_STATE}/base-packages-v1"
-for base_command in curl git jq nginx redis-server psql python3 gcc xz; do
+BASE_READY="${INSTALL_STATE}/base-packages-v2"
+for base_command in curl git jq nginx redis-server python3 gcc xz; do
   command -v "$base_command" >/dev/null 2>&1 || rm -f "$BASE_READY"
 done
 if [[ ! -f "$BASE_READY" ]]; then
   apt-get update
   apt-get dist-upgrade -y
   apt-get install -y --no-install-recommends \
-    ca-certificates curl git jq nginx openssl redis-server postgresql-client \
+    ca-certificates curl git jq nginx openssl redis-server \
     python3 python3-dev python3-venv build-essential libpq-dev xz-utils
   touch "$BASE_READY"
 else
   echo "Using cached base package stage"
 fi
+
+POSTGRES_READY="${INSTALL_STATE}/postgresql-local-17-v1"
+if ! dpkg-query -W -f='${Status}' postgresql-17 2>/dev/null | grep -Fq 'install ok installed' ||
+  [[ ! -x "$PG_BIN_DIR/psql" || ! -x "$PG_BIN_DIR/pg_dump" || ! -x "$PG_BIN_DIR/pg_restore" ]] ||
+  ! pg_lsclusters --no-header | awk '$1 == 17 && $2 == "main" {found=1} END {exit !found}'; then
+  rm -f "$POSTGRES_READY"
+fi
+if [[ ! -f "$POSTGRES_READY" ]]; then
+  apt-get update
+  apt-get install -y --no-install-recommends postgresql-17 postgresql-client-17
+  touch "$POSTGRES_READY"
+else
+  echo "Using cached local PostgreSQL 17 stage"
+fi
+
+POSTGRES_PASSWORD="$(printf '%s' "$POSTGRES_PASSWORD_B64" | base64 -d)"
+[[ -n "$POSTGRES_PASSWORD" ]] || { echo "Local PostgreSQL password is empty" >&2; exit 1; }
+pg_conftool "$POSTGRES_MAJOR" main set listen_addresses 127.0.0.1
+pg_conftool "$POSTGRES_MAJOR" main set password_encryption scram-sha-256
+PG_HBA="/etc/postgresql/${POSTGRES_MAJOR}/main/pg_hba.conf"
+HBA_RULE="host ${POSTGRES_DB} ${POSTGRES_USER} 127.0.0.1/32 scram-sha-256"
+grep -Fqx "$HBA_RULE" "$PG_HBA" || printf '%s\n' "$HBA_RULE" >>"$PG_HBA"
+systemctl enable postgresql >/dev/null
+systemctl restart postgresql
+systemctl is-active --quiet postgresql
+
+runuser -u postgres -- "$PG_BIN_DIR/psql" -v ON_ERROR_STOP=1 \
+  --set=db_user="$POSTGRES_USER" --set=db_password="$POSTGRES_PASSWORD" postgres <<'SQL'
+SELECT format(
+  'CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD %L',
+  :'db_user', :'db_password'
+)
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'db_user') \gexec
+SELECT format(
+  'ALTER ROLE %I WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD %L',
+  :'db_user', :'db_password'
+) \gexec
+SQL
+runuser -u postgres -- "$PG_BIN_DIR/psql" -v ON_ERROR_STOP=1 \
+  --set=db_name="$POSTGRES_DB" --set=db_user="$POSTGRES_USER" postgres <<'SQL'
+SELECT format('CREATE DATABASE %I OWNER %I ENCODING ''UTF8'' TEMPLATE template0', :'db_name', :'db_user')
+WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db_name') \gexec
+SELECT format('ALTER DATABASE %I OWNER TO %I', :'db_name', :'db_user') \gexec
+SQL
 
 install_node() {
   local architecture node_arch sums archive version
@@ -150,8 +198,9 @@ id financeapp >/dev/null 2>&1 || useradd --system --home-dir /opt/financeapp --s
 usermod -a -G financeapp www-data
 install -d -o financeapp -g financeapp -m 0750 \
   /opt/financeapp /opt/financeapp/releases /opt/financeapp/shared \
-  /var/lib/financeapp/documents /var/backups/financeapp
+  /var/lib/financeapp/documents
 install -d -o root -g financeapp -m 0750 /etc/financeapp
+install -d -o root -g root -m 0700 /var/backups/financeapp /var/backups/financeapp/daily
 runuser -u financeapp -- env HOME=/opt/financeapp/shared PATH=/usr/local/bin:/usr/bin:/bin \
   /usr/local/bin/npm --version
 
@@ -165,12 +214,11 @@ else
   runuser -u financeapp -- git -C /opt/financeapp/source merge --ff-only "origin/${FINANCEAPP_BRANCH}"
 fi
 
-DB_PASSWORD="$(printf '%s' "$DB_PASSWORD_B64" | base64 -d)"
-export DB_USER DB_PASSWORD DB_HOST DB_PORT DB_NAME DB_SSLMODE
+export POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB
 PG_DSN="$(python3 - <<'PY'
 import os
 from urllib.parse import quote
-print(f"postgresql://{quote(os.environ['DB_USER'], safe='')}:{quote(os.environ['DB_PASSWORD'], safe='')}@{os.environ['DB_HOST']}:{os.environ['DB_PORT']}/{quote(os.environ['DB_NAME'], safe='')}?sslmode={quote(os.environ['DB_SSLMODE'], safe='')}")
+print(f"postgresql://{quote(os.environ['POSTGRES_USER'], safe='')}:{quote(os.environ['POSTGRES_PASSWORD'], safe='')}@127.0.0.1:5432/{quote(os.environ['POSTGRES_DB'], safe='')}?sslmode=disable")
 PY
 )"
 DATABASE_URL="${PG_DSN/postgresql:\/\//postgresql+psycopg:\/\/}"
@@ -190,12 +238,14 @@ chmod 0640 /etc/financeapp/financeapp.env
 chown root:financeapp /etc/financeapp/financeapp.env
 
 {
-  printf 'PGHOST=%q\n' "$DB_HOST"
-  printf 'PGPORT=%q\n' "$DB_PORT"
-  printf 'PGDATABASE=%q\n' "$DB_NAME"
-  printf 'PGUSER=%q\n' "$DB_USER"
-  printf 'PGPASSWORD=%q\n' "$DB_PASSWORD"
-  printf 'PGSSLMODE=%q\n' "$DB_SSLMODE"
+  printf 'PGHOST=%q\n' 127.0.0.1
+  printf 'PGPORT=%q\n' 5432
+  printf 'PGDATABASE=%q\n' "$POSTGRES_DB"
+  printf 'PGUSER=%q\n' "$POSTGRES_USER"
+  printf 'PGPASSWORD=%q\n' "$POSTGRES_PASSWORD"
+  printf 'PGSSLMODE=%q\n' disable
+  printf 'POSTGRES_MAJOR=%q\n' "$POSTGRES_MAJOR"
+  printf 'PG_BIN_DIR=%q\n' "$PG_BIN_DIR"
 } >/etc/financeapp/postgres.env
 chmod 0600 /etc/financeapp/postgres.env
 
@@ -203,6 +253,8 @@ cat >/etc/financeapp/deploy.conf <<EOF
 FINANCEAPP_REPO_URL=${FINANCEAPP_REPO_URL}
 FINANCEAPP_BRANCH=${FINANCEAPP_BRANCH}
 INSTALL_AI=${INSTALL_AI:-no}
+POSTGRES_MAJOR=${POSTGRES_MAJOR}
+PG_BIN_DIR=${PG_BIN_DIR}
 KEEP_RELEASES=3
 KEEP_BACKUPS=7
 MIN_FREE_DISK_MB=2048
@@ -211,13 +263,14 @@ chmod 0644 /etc/financeapp/deploy.conf
 
 install -m 0755 /opt/financeapp/source/ops/proxmox/update.sh /usr/local/sbin/financeapp-update
 install -m 0755 /opt/financeapp/source/ops/proxmox/configure-tailscale.sh /usr/local/sbin/financeapp-configure-tailscale
+install -m 0755 /opt/financeapp/source/ops/proxmox/backup.sh /usr/local/sbin/financeapp-backup
 
 cat >/etc/systemd/system/financeapp-api.service <<'EOF'
 [Unit]
 Description=FinanceApp API
-After=network-online.target redis-server.service
+After=network-online.target postgresql.service redis-server.service
 Wants=network-online.target
-Requires=redis-server.service
+Requires=postgresql.service redis-server.service
 
 [Service]
 Type=simple
@@ -241,8 +294,8 @@ EOF
 cat >/etc/systemd/system/financeapp-worker.service <<'EOF'
 [Unit]
 Description=FinanceApp document worker
-After=network-online.target redis-server.service financeapp-api.service
-Requires=redis-server.service
+After=network-online.target postgresql.service redis-server.service financeapp-api.service
+Requires=postgresql.service redis-server.service
 
 [Service]
 Type=simple
@@ -261,6 +314,35 @@ ReadWritePaths=/var/lib/financeapp
 
 [Install]
 WantedBy=multi-user.target
+EOF
+
+cat >/etc/systemd/system/financeapp-backup.service <<'EOF'
+[Unit]
+Description=FinanceApp daily PostgreSQL backup
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/financeapp-backup
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/financeapp
+EOF
+
+cat >/etc/systemd/system/financeapp-backup.timer <<'EOF'
+[Unit]
+Description=Run FinanceApp PostgreSQL backup daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
 EOF
 
 cat >/etc/nginx/sites-available/financeapp <<'EOF'
@@ -291,16 +373,19 @@ ln -sfn /etc/nginx/sites-available/financeapp /etc/nginx/sites-enabled/financeap
 nginx -t
 
 systemctl daemon-reload
-systemctl enable redis-server nginx financeapp-api financeapp-worker >/dev/null
-systemctl start redis-server
+systemctl enable postgresql redis-server nginx financeapp-api financeapp-worker financeapp-backup.timer >/dev/null
+systemctl start postgresql redis-server
 
-if ! PGPASSWORD="$DB_PASSWORD" PGSSLMODE="$DB_SSLMODE" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+if ! PGPASSWORD="$POSTGRES_PASSWORD" PGSSLMODE=disable "$PG_BIN_DIR/psql" \
+  -h 127.0.0.1 -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
   -v ON_ERROR_STOP=1 -Atc 'select 1' >/dev/null; then
-  LXC_IP="$(hostname -I | awk '{print $1}')"
-  echo "PostgreSQL rejected the LXC connection. Permit ${LXC_IP}/32 in pg_hba.conf." >&2
+  echo "Local PostgreSQL rejected the generated FinanceApp credentials." >&2
   exit 1
 fi
 
 /usr/local/sbin/financeapp-update --initial
+/usr/local/sbin/financeapp-backup
+systemctl start financeapp-backup.timer
+touch "$INSTALL_STATE/install-complete-v2"
 apt-get autoremove -y
 apt-get clean
