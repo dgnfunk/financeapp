@@ -74,6 +74,27 @@ FAKE_SERVER_VERSION_NUM=180004 FAKE_DUMP_VERSION=17.11 verify_postgres_versions"
   fail "the updater accepted pg_dump 17 for a PostgreSQL 18 server"
 fi
 
+CONFIG_FUNCTION="$(awk '/^set_postgres_config_value\(\)/ {capture=1} capture {print} capture && $0 == "}" {exit}' "$INSTALL")"
+CONFIG_TEST_FILE="$VERSION_TEST_DIR/postgresql.conf"
+cat >"$CONFIG_TEST_FILE" <<'EOF'
+#listen_addresses = 'localhost'
+listen_addresses = 127.0.0.1
+listen_addresses = '''127.0.0.1'''
+password_encryption = '''scram-sha-256'''
+EOF
+bash -c "${CONFIG_FUNCTION}
+POSTGRES_CONFIG='$CONFIG_TEST_FILE'
+chown() { :; }
+chmod() { :; }
+set_postgres_config_value listen_addresses \"'127.0.0.1'\"
+set_postgres_config_value password_encryption \"'scram-sha-256'\""
+[[ "$(grep -Fxc "listen_addresses = '127.0.0.1'" "$CONFIG_TEST_FILE")" -eq 1 ]] ||
+  fail "PostgreSQL listen_addresses was not normalized to one quoted loopback value"
+[[ "$(grep -Fxc "password_encryption = 'scram-sha-256'" "$CONFIG_TEST_FILE")" -eq 1 ]] ||
+  fail "PostgreSQL password_encryption was not normalized to one quoted SCRAM value"
+reject_text "$CONFIG_TEST_FILE" "listen_addresses = 127.0.0.1" "the invalid unquoted IPv4 value survived normalization"
+reject_text "$CONFIG_TEST_FILE" "'''" "double-quoted PostgreSQL literals survived normalization"
+
 # Literal source-code invariants intentionally use single-quoted shell strings.
 # shellcheck disable=SC2016
 require_text "$LXC" 'REUSE_SAVED_CONFIG="${REUSE_SAVED_CONFIG:-yes}"' "resume must reuse saved configuration by default"
@@ -103,8 +124,8 @@ require_text "$INSTALL" 'systemctl restart "$POSTGRES_CLUSTER_SERVICE"' "install
 require_text "$INSTALL" '"$PG_BIN_DIR/pg_isready" --quiet --host /var/run/postgresql --port 5432' "installation must wait for PostgreSQL readiness"
 # shellcheck disable=SC2016
 require_text "$INSTALL" 'journalctl -u "$POSTGRES_CLUSTER_SERVICE"' "PostgreSQL startup failures must include cluster diagnostics"
-require_text "$INSTALL" 'set listen_addresses "'\''127.0.0.1'\''"' "PostgreSQL listen_addresses must be a quoted loopback string"
-require_text "$INSTALL" 'set password_encryption "'\''scram-sha-256'\''"' "PostgreSQL password_encryption must be a quoted enum value"
+require_text "$INSTALL" 'set_postgres_config_value listen_addresses "'\''127.0.0.1'\''"' "PostgreSQL listen_addresses must be a quoted loopback string"
+require_text "$INSTALL" 'set_postgres_config_value password_encryption "'\''scram-sha-256'\''"' "PostgreSQL password_encryption must be a quoted enum value"
 require_text "$INSTALL" 'validate_postgres_setting listen_addresses 127.0.0.1' "PostgreSQL configuration must be parsed before startup"
 require_text "$INSTALL" 'validate_postgres_setting password_encryption scram-sha-256' "PostgreSQL SCRAM configuration must be parsed before startup"
 require_text "$INSTALL" 'PGSSLMODE=%q\n' "local database environment must be explicit"
