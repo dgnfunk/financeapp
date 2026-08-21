@@ -73,6 +73,8 @@ bootstrap y se crea de nuevo con permisos compatibles con Debian 13.
 El checkout existente también se actualiza mediante fast-forward como el usuario
 `financeapp`; Git nunca necesita una excepción global `safe.directory` para un
 repositorio propiedad de otro usuario.
+Los builds de Node se ejecutan con una ruta explícita y mínima que incluye
+`/usr/local/bin`, independientemente del `PATH` que Debian asigne a `runuser`.
 
 Si LXC todavía no puede iniciar, el instalador imprime automáticamente la
 salida completa de `pct start --debug`, la configuración generada, la versión y
