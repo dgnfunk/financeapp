@@ -105,7 +105,7 @@ if ! pg_lsclusters --no-header | awk '$1 == 17 && $2 == "main" {found=1} END {ex
   echo "Creating missing PostgreSQL ${POSTGRES_MAJOR}/main cluster"
   pg_createcluster "$POSTGRES_MAJOR" main --start-conf=auto
 fi
-for postgres_binary in psql pg_dump pg_restore pg_isready; do
+for postgres_binary in postgres psql pg_dump pg_restore pg_isready; do
   [[ -x "${PG_BIN_DIR}/${postgres_binary}" ]] || {
     echo "Missing PostgreSQL ${POSTGRES_MAJOR} binary: ${PG_BIN_DIR}/${postgres_binary}" >&2
     exit 1
@@ -119,8 +119,27 @@ touch "$POSTGRES_READY"
 
 POSTGRES_PASSWORD="$(printf '%s' "$POSTGRES_PASSWORD_B64" | base64 -d)"
 [[ -n "$POSTGRES_PASSWORD" ]] || { echo "Local PostgreSQL password is empty" >&2; exit 1; }
-pg_conftool "$POSTGRES_MAJOR" main set listen_addresses 127.0.0.1
-pg_conftool "$POSTGRES_MAJOR" main set password_encryption scram-sha-256
+# pg_conftool writes the value verbatim. PostgreSQL string and enum values must
+# therefore retain their SQL quotes inside the argument.
+pg_conftool "$POSTGRES_MAJOR" main set listen_addresses "'127.0.0.1'"
+pg_conftool "$POSTGRES_MAJOR" main set password_encryption "'scram-sha-256'"
+POSTGRES_CONFIG="/etc/postgresql/${POSTGRES_MAJOR}/main/postgresql.conf"
+POSTGRES_DATA="/var/lib/postgresql/${POSTGRES_MAJOR}/main"
+validate_postgres_setting() {
+  local setting="$1" expected="$2" actual
+  if ! actual="$(runuser -u postgres -- "$PG_BIN_DIR/postgres" \
+    -D "$POSTGRES_DATA" -C "$setting" -c "config_file=${POSTGRES_CONFIG}" 2>&1)"; then
+    echo "Invalid PostgreSQL configuration while reading ${setting}:" >&2
+    echo "$actual" >&2
+    exit 1
+  fi
+  [[ "$actual" == "$expected" ]] || {
+    echo "Unexpected PostgreSQL ${setting}: expected ${expected}, got ${actual}" >&2
+    exit 1
+  }
+}
+validate_postgres_setting listen_addresses 127.0.0.1
+validate_postgres_setting password_encryption scram-sha-256
 PG_HBA="/etc/postgresql/${POSTGRES_MAJOR}/main/pg_hba.conf"
 HBA_RULE="host ${POSTGRES_DB} ${POSTGRES_USER} 127.0.0.1/32 scram-sha-256"
 grep -Fqx "$HBA_RULE" "$PG_HBA" || printf '%s\n' "$HBA_RULE" >>"$PG_HBA"
