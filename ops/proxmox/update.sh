@@ -98,6 +98,14 @@ git_as_financeapp() {
   runuser -u financeapp -- git -C "$SOURCE" "$@"
 }
 
+run_release_migrations() {
+  (
+    cd "$RELEASE/server"
+    runuser -u financeapp -- env "DATABASE_URL=${DATABASE_URL}" "PYTHONPATH=${RELEASE}/server" \
+      "$RELEASE/server/.venv/bin/python" -m alembic -c alembic.ini upgrade head
+  )
+}
+
 release_commit() {
   local release_path="$1"
   [[ -d "$release_path/.git" || -f "$release_path/.git" ]] || return 1
@@ -245,6 +253,20 @@ else
   runuser -u financeapp -- touch "$PWA_READY"
 fi
 
+for migration_path in \
+  "$RELEASE/server/pyproject.toml" \
+  "$RELEASE/server/alembic.ini" \
+  "$RELEASE/server/alembic/env.py"; do
+  runuser -u financeapp -- test -r "$migration_path" || {
+    echo "Migration prerequisite is not readable by financeapp: ${migration_path}" >&2
+    exit 1
+  }
+done
+runuser -u financeapp -- test -x "$RELEASE/server/.venv/bin/python" || {
+  echo "Migration Python is not executable by financeapp: ${RELEASE}/server/.venv/bin/python" >&2
+  exit 1
+}
+
 BACKUP="${BACKUPS}/pre-update-$(date -u +%Y%m%dT%H%M%SZ)-${CURRENT_COMMIT:-initial}.dump"
 update_failed() {
   local failure_status=$?
@@ -275,8 +297,7 @@ chmod 0600 "$BACKUP"
 chown root:root "$BACKUP"
 
 echo "Applying database migrations"
-runuser -u financeapp -- env "DATABASE_URL=${DATABASE_URL}" "PYTHONPATH=${RELEASE}/server" \
-  "$RELEASE/server/.venv/bin/python" -m alembic -c "$RELEASE/server/alembic.ini" upgrade head
+run_release_migrations
 
 if [[ -n "$CURRENT_RELEASE" ]]; then
   ln -sfn "$CURRENT_RELEASE" "$PREVIOUS"

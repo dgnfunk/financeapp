@@ -74,6 +74,19 @@ FAKE_SERVER_VERSION_NUM=180004 FAKE_DUMP_VERSION=17.11 verify_postgres_versions"
   fail "the updater accepted pg_dump 17 for a PostgreSQL 18 server"
 fi
 
+MIGRATION_FUNCTION="$(awk '/^run_release_migrations\(\)/ {capture=1} capture {print} capture && $0 == "}" {exit}' "$UPDATE")"
+MIGRATION_RELEASE="$VERSION_TEST_DIR/release"
+MIGRATION_PWD_FILE="$VERSION_TEST_DIR/migration-pwd"
+mkdir -p "$MIGRATION_RELEASE/server"
+bash -c "${MIGRATION_FUNCTION}
+RELEASE='$MIGRATION_RELEASE'
+DATABASE_URL=postgresql://test
+MIGRATION_PWD_FILE='$MIGRATION_PWD_FILE'
+runuser() { printf '%s\\n' \"\$PWD\" >\"\$MIGRATION_PWD_FILE\"; }
+run_release_migrations"
+[[ "$(cat "$MIGRATION_PWD_FILE")" == "$MIGRATION_RELEASE/server" ]] ||
+  fail "Alembic migrations did not run from the release server directory"
+
 CONFIG_FUNCTION="$(awk '/^set_postgres_config_value\(\)/ {capture=1} capture {print} capture && $0 == "}" {exit}' "$INSTALL")"
 CONFIG_TEST_FILE="$VERSION_TEST_DIR/postgresql.conf"
 cat >"$CONFIG_TEST_FILE" <<'EOF'
@@ -134,6 +147,12 @@ require_text "$UPDATE" 'systemctl is-active --quiet "$POSTGRES_CLUSTER_SERVICE" 
 require_text "$UPDATE" 'redis-cli ping' "health check must validate Redis"
 require_text "$UPDATE" 'verify_postgres_versions' "updates must reject incompatible pg_dump versions"
 require_order "$UPDATE" 'verify_postgres_versions' 'systemctl stop financeapp-worker' "PostgreSQL versions must be checked before stopping services"
+# shellcheck disable=SC2016
+require_text "$UPDATE" 'runuser -u financeapp -- test -r "$migration_path"' "migration files must be readable before stopping services"
+require_order "$UPDATE" 'Migration prerequisite is not readable' 'systemctl stop financeapp-worker' "migration prerequisites must be checked before stopping services"
+# shellcheck disable=SC2016
+require_text "$UPDATE" 'cd "$RELEASE/server"' "Alembic must run from the release server directory"
+require_text "$UPDATE" '-m alembic -c alembic.ini upgrade head' "Alembic must use the release-local configuration"
 require_text "$UPDATE" 'pg_database_size(current_database())' "disk preflight must include backup size"
 require_text "$UPDATE" 'KEEP_BACKUPS:-7' "database dumps need bounded retention"
 require_text "$UPDATE" '-rebuild-' "--force must build an isolated release"
