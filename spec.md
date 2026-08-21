@@ -118,11 +118,15 @@ Aplicación personal, self-hosted y de un solo usuario para registrar, importar,
 
 - Ruff sin hallazgos y 17 pruebas Python aprobadas.
 - Build TypeScript/Vite de producción aprobado y runtime móvil protegido verificado.
-- Cuatro pruebas de empaquetado web y once pruebas Playwright aprobadas.
+- Cuatro pruebas de empaquetado web y doce pruebas Playwright aprobadas.
 - Playwright cubre estados provenientes de API en 390, 1024 y 1440 px.
 - Cadena Alembic validada hasta `c73e4f9a0d21` y SQL PostgreSQL generado en modo offline.
 
-No fue posible ejecutar contenedores ni una migración contra PostgreSQL real porque Docker no está instalado en este entorno. La ceremonia WebAuthn y la restauración restic requieren el hostname HTTPS, dispositivo y repositorio de respaldo definitivos; ambas deben comprobarse antes de usar la instalación como única copia de datos reales.
+Las migraciones y un recorrido API se ejecutaron posteriormente contra una
+instancia PostgreSQL temporal real; véase la auditoría del 21 de agosto. La
+ceremonia WebAuthn y la restauración restic requieren el hostname HTTPS,
+dispositivo y repositorio de respaldo definitivos; ambas deben comprobarse
+antes de usar la instalación como única copia de datos reales.
 
 ## 13. Decisiones y estado del despliegue Proxmox — 20 de agosto de 2026
 
@@ -196,3 +200,71 @@ No fue posible ejecutar contenedores ni una migración contra PostgreSQL real po
    validar passkeys y acceso PWA desde iPhone.
 3. **Siguiente:** realizar una restauración completa del dump/restic y documentar
    el resultado operativo.
+
+## 14. Auditoría SQLite/PostgreSQL — 21 de agosto de 2026
+
+### Alcance y evidencia
+
+- Se inspeccionaron estáticamente las 66 rutas declaradas en
+  `server/app/main.py`, los modelos, servicios, dos migraciones Alembic y la CI.
+- Se creó una instancia PostgreSQL 15 temporal y aislada, se aplicó Alembic
+  hasta `c73e4f9a0d21` y `alembic check` no detectó diferencias entre el esquema
+  migrado y los modelos. PostgreSQL 17 de producción ya había aplicado la misma
+  cadena correctamente según la evidencia del LXC.
+- Se ejecutaron 72 operaciones API de lectura y escritura sobre PostgreSQL, con
+  66 resultados esperados y seis fallos. Cuatro de esos seis corresponden a
+  variantes del mismo listado de movimientos.
+- La verificación dinámica cubrió todas las familias de persistencia. Las dos
+  verificaciones WebAuthn que requieren una ceremonia real de navegador y la
+  eliminación posterior de una passkey permanecen sin verificar.
+
+### Brechas confirmadas
+
+| Brecha | Estado y evidencia | Impacto | Complejidad | Prioridad |
+|---|---|---|---|---|
+| Listado de movimientos usa `DISTINCT` sobre `transactions.tags` de tipo PostgreSQL `JSON` | Confirmado: `/api/v1/transactions` y sus filtros devuelven 500; PostgreSQL no puede comparar `JSON` para `DISTINCT`. SQLite oculta el error. | Bloquea la carga completa de la PWA después del login. | Baja | Ahora |
+| Listado de sesiones declara `-> dict` pero devuelve una lista | Confirmado: `/api/v1/auth/sessions` devuelve 500 por validación de respuesta. No es específico de PostgreSQL, pero la prueba integral lo descubrió. | Impide administrar y revocar dispositivos desde la UI. | Baja | Ahora |
+| Los payloads `Decimal` no limitan `max_digits` conforme a columnas `NUMERIC` | Confirmado: un saldo que excede `NUMERIC(18,2)` pasa Pydantic y PostgreSQL devuelve 500. El mismo riesgo existe en postings, presupuestos, recurrencias, metas, FX y ajustes monetarios. SQLite no aplica precisión. | Entradas grandes o corruptas producen errores internos en vez de 422. | Baja | Ahora |
+| Recurrencias y metas no validan cuentas referenciadas | Confirmado: UUID de cuenta inexistente produce 500 por `ForeignKeyViolation` en PostgreSQL; SQLite de pruebas no aplica claves foráneas. | Una referencia obsoleta o manipulada rompe la mutación y expone un error interno. | Baja | Ahora |
+| Downgrade Alembic conserva los ENUM `accountkind` e `importstatus` | Confirmado: `downgrade base` termina, pero un nuevo `upgrade head` falla con `DuplicateObject`. | La prueba de reversibilidad y una reconstrucción basada en downgrade no son confiables. El despliegue normal hacia adelante no está afectado. | Media | Siguiente |
+| CI backend solo ejecuta API sobre SQLite y genera SQL Alembic offline | Confirmado en `.github/workflows/ci.yml` y `server/tests/test_api.py`. | Nuevas diferencias PostgreSQL pueden llegar de nuevo a producción. | Media | Ahora |
+
+### Trabajo priorizado
+
+1. Sustituir `DISTINCT` por filtros `EXISTS`/`any()` y agregar pruebas para
+   listado simple, por cuenta, categoría, texto y fechas sobre PostgreSQL.
+2. Corregir el contrato de `/auth/sessions`, añadir límites `max_digits` y
+   convertir violaciones de referencias/precisión en respuestas 4xx.
+3. Incorporar PostgreSQL 17 como servicio de CI y ejecutar allí migraciones,
+   `alembic check` y los flujos API; SQLite puede conservarse solo para pruebas
+   unitarias rápidas.
+4. Hacer explícita la creación/eliminación de ENUM en las migraciones y probar
+   `upgrade head -> downgrade base -> upgrade head` en una base descartable.
+5. Evitar que el frontend descarte todo el estado cuando falla un agregado
+   secundario; mostrar el endpoint afectado de forma redactada y conservar las
+   secciones sanas.
+
+### Cierre de la auditoría
+
+Las cinco líneas de trabajo anteriores quedaron implementadas el 21 de agosto
+de 2026:
+
+- El listado de movimientos usa `EXISTS` mediante relaciones SQLAlchemy y ya
+  no aplica `DISTINCT` a columnas `JSON`.
+- El contrato de sesiones devuelve una lista; importes y porcentajes validan la
+  precisión de sus columnas antes de llegar al motor, y las referencias a
+  cuentas inválidas producen 422.
+- La migración inicial elimina explícitamente sus tipos ENUM al volver a
+  `base`. El ciclo `upgrade head -> downgrade base -> upgrade head` pasó en una
+  base PostgreSQL descartable y `alembic check` quedó limpio.
+- CI levanta PostgreSQL 17 y ejecuta migraciones, reversibilidad y la suite de
+  integración real. La cobertura PostgreSQL recorre autenticación, cuentas,
+  movimientos y transferencias, presupuestos, escenarios, recurrencias, metas,
+  FX, categorías, etiquetas, importaciones, analítica, chat, auditoría y tokens
+  de Atajos.
+- La PWA conserva las respuestas sanas cuando falla una consulta independiente
+  y presenta un aviso redactado con la sección que no pudo actualizarse.
+
+Evidencia local final: 19 pruebas backend sobre PostgreSQL, 17 pruebas rápidas
+sobre SQLite con dos pruebas PostgreSQL omitidas, build TypeScript/Vite y cinco
+pruebas Playwright responsive del estado financiero y degradación parcial.

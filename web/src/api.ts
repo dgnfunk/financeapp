@@ -99,6 +99,7 @@ export type FinanceState = {
   imports: ImportItem[];
   audit: AuditItem[];
   scenarios: Scenario[];
+  warnings: string[];
 };
 
 const API_URL = import.meta.env.VITE_API_URL ?? "/api/v1";
@@ -255,7 +256,7 @@ export async function registerPasskey(label: string) {
 
 export async function loadFinanceState(months = 12): Promise<FinanceState> {
   const currentMonth = new Date().toISOString().slice(0, 7);
-  const [accounts, transactions, budgets, summary, cashFlow, forecastBase, forecastConservative, imports, audit, scenarios] = await Promise.all([
+  const requests = [
     apiRequest<Account[]>("/accounts"),
     apiRequest<Transaction[]>("/transactions?limit=200"),
     apiRequest<Budget[]>(`/budgets?month=${currentMonth}`),
@@ -266,8 +267,55 @@ export async function loadFinanceState(months = 12): Promise<FinanceState> {
     apiRequest<ImportItem[]>("/imports"),
     apiRequest<AuditItem[]>("/admin/audit"),
     apiRequest<Scenario[]>("/forecasts/scenarios"),
-  ]);
-  return { accounts, transactions, budgets, summary, cashFlow, forecastBase, forecastConservative, imports, audit, scenarios };
+  ] as const;
+  const labels = ["Cuentas", "Movimientos", "Presupuestos", "Resumen", "Flujo de efectivo", "Proyección base", "Proyección conservadora", "Importaciones", "Auditoría", "Escenarios"];
+  const results = await Promise.allSettled(requests);
+  const authenticationFailure = results.find((result) => result.status === "rejected" && result.reason instanceof ApiError && result.reason.status === 401);
+  if (authenticationFailure?.status === "rejected") throw authenticationFailure.reason;
+  const firstFailure = results.find((result) => result.status === "rejected");
+  if (results.every((result) => result.status === "rejected") && firstFailure?.status === "rejected") throw firstFailure.reason;
+
+  const value = <T>(index: number, fallback: T): T => {
+    const result = results[index];
+    return result.status === "fulfilled" ? result.value as T : fallback;
+  };
+  const emptySummary: Summary = {
+    transaction_count: 0,
+    account_count: 0,
+    imports_to_review: 0,
+    base_currency: "MXN",
+    net_worth: "0",
+    income_month: "0",
+    expenses_month: "0",
+    net_flow_month: "0",
+    savings_rate: "0",
+    freshness: null,
+  };
+  const emptyForecast = (scenario: string, name: string): Forecast => ({
+    scenario,
+    name,
+    generated_at: new Date().toISOString(),
+    opening_balance: "0",
+    monthly_income: "0",
+    monthly_expenses: "0",
+    monthly_goal_allocation: "0",
+    assumptions: {},
+    points: [],
+  });
+
+  return {
+    accounts: value<Account[]>(0, []),
+    transactions: value<Transaction[]>(1, []),
+    budgets: value<Budget[]>(2, []),
+    summary: value<Summary>(3, emptySummary),
+    cashFlow: value<CashFlowPoint[]>(4, []),
+    forecastBase: value<Forecast>(5, emptyForecast("base", "Base")),
+    forecastConservative: value<Forecast>(6, emptyForecast("conservative", "Conservador")),
+    imports: value<ImportItem[]>(7, []),
+    audit: value<AuditItem[]>(8, []),
+    scenarios: value<Scenario[]>(9, []),
+    warnings: results.flatMap((result, index) => result.status === "rejected" ? [labels[index]] : []),
+  };
 }
 
 export const financeApi = {

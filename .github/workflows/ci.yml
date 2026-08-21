@@ -18,6 +18,28 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_DB: financeapp_test
+          POSTGRES_USER: financeapp_test
+          POSTGRES_PASSWORD: financeapp_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U financeapp_test -d financeapp_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://financeapp_test:financeapp_test_password@127.0.0.1:5432/financeapp_test
+      DOCUMENT_DIR: /tmp/financeapp-documents
+      DOCUMENT_KEY_B64: eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=
+      MASTER_TOKEN: financeapp-ci-master-token
+      OLLAMA_URL: http://127.0.0.1:9
+      REDIS_URL: redis://127.0.0.1:9/0
+      RUN_POSTGRES_TESTS: "1"
     defaults:
       run:
         working-directory: server
@@ -30,8 +52,13 @@ jobs:
       - run: python -m pip install -e '.[dev]'
       - run: python -m pip install pip-audit
       - run: pip-audit
-      - run: ruff check app tests
+      - run: ruff check app tests alembic
+      - run: alembic upgrade head
+      - run: alembic check
       - run: pytest -q
+      - run: alembic downgrade base
+      - run: alembic upgrade head
+      - run: alembic check
       - run: alembic upgrade head --sql > /tmp/financeapp-migrations.sql
 
   frontend:

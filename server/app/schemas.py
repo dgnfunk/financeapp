@@ -15,10 +15,10 @@ class AccountIn(BaseModel):
     alias: str | None = Field(default=None, max_length=120)
     kind: AccountKind
     currency: str = Field(default="MXN", min_length=3, max_length=3)
-    opening_balance: Decimal = Field(default=Decimal(0), decimal_places=2)
+    opening_balance: Decimal = Field(default=Decimal(0), max_digits=18, decimal_places=2)
     institution: str | None = Field(default=None, max_length=120)
     last_four: str | None = Field(default=None, pattern=r"^\d{4}$")
-    credit_limit: Decimal | None = Field(default=None, gt=0, decimal_places=2)
+    credit_limit: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=2)
     statement_day: int | None = Field(default=None, ge=1, le=31)
     due_day: int | None = Field(default=None, ge=1, le=31)
 
@@ -28,7 +28,7 @@ class AccountUpdate(BaseModel):
     alias: str | None = Field(default=None, max_length=120)
     institution: str | None = Field(default=None, max_length=120)
     last_four: str | None = Field(default=None, pattern=r"^\d{4}$")
-    credit_limit: Decimal | None = Field(default=None, gt=0, decimal_places=2)
+    credit_limit: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=2)
     statement_day: int | None = Field(default=None, ge=1, le=31)
     due_day: int | None = Field(default=None, ge=1, le=31)
 
@@ -46,7 +46,7 @@ class AccountOut(AccountIn):
 
 class PostingIn(BaseModel):
     account_id: UUID
-    amount: Decimal = Field(decimal_places=2)
+    amount: Decimal = Field(max_digits=18, decimal_places=2)
     currency: str = Field(default="MXN", min_length=3, max_length=3)
     category: str | None = Field(default=None, max_length=120)
 
@@ -114,7 +114,7 @@ class CaptureOut(BaseModel):
 class BudgetIn(BaseModel):
     month: date
     category: str = Field(min_length=1, max_length=120)
-    limit_amount: Decimal = Field(gt=0, decimal_places=2)
+    limit_amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
     rollover: bool = False
 
 
@@ -129,7 +129,7 @@ class BudgetOut(BudgetIn):
 
 class SimpleSplit(BaseModel):
     category: str = Field(min_length=1, max_length=120)
-    amount: Decimal = Field(gt=0, decimal_places=2)
+    amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
 
 
 class SimpleTransactionIn(BaseModel):
@@ -137,7 +137,7 @@ class SimpleTransactionIn(BaseModel):
     kind: Literal["expense", "income", "transfer", "debt_payment", "valuation"]
     account_id: UUID
     target_account_id: UUID | None = None
-    amount: Decimal = Field(gt=0, decimal_places=2)
+    amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
     description: str = Field(min_length=1, max_length=240)
     merchant: str | None = Field(default=None, max_length=160)
     category: str | None = Field(default=None, max_length=120)
@@ -179,7 +179,7 @@ class TagIn(BaseModel):
 class RecurringRuleIn(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     kind: Literal["income", "expense", "debt_payment"]
-    amount: Decimal = Field(gt=0, decimal_places=2)
+    amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
     currency: str = Field(default="MXN", min_length=3, max_length=3)
     cadence: Literal["weekly", "biweekly", "monthly", "yearly"] = "monthly"
     next_date: date
@@ -192,7 +192,7 @@ class RecurringRuleIn(BaseModel):
 
 class GoalIn(BaseModel):
     name: str = Field(min_length=1, max_length=160)
-    target_amount: Decimal = Field(gt=0, decimal_places=2)
+    target_amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
     target_date: date | None = None
     account_id: UUID | None = None
     active: bool = True
@@ -200,16 +200,22 @@ class GoalIn(BaseModel):
 
 class FxRateIn(BaseModel):
     currency: str = Field(min_length=3, max_length=3)
-    mxn_per_unit: Decimal = Field(gt=0, decimal_places=6)
+    mxn_per_unit: Decimal = Field(gt=0, max_digits=18, decimal_places=6)
     effective_on: date
 
 
 class ScenarioIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     kind: Literal["custom"] = "custom"
-    income_adjustment_pct: Decimal = Field(default=Decimal(0), ge=-100, le=500)
-    expense_adjustment_pct: Decimal = Field(default=Decimal(0), ge=-100, le=500)
-    one_time_adjustment: Decimal = Field(default=Decimal(0), decimal_places=2)
+    income_adjustment_pct: Decimal = Field(
+        default=Decimal(0), ge=-100, le=500, max_digits=8, decimal_places=4
+    )
+    expense_adjustment_pct: Decimal = Field(
+        default=Decimal(0), ge=-100, le=500, max_digits=8, decimal_places=4
+    )
+    one_time_adjustment: Decimal = Field(
+        default=Decimal(0), max_digits=18, decimal_places=2
+    )
     assumptions: dict[str, Any] = {}
 
 

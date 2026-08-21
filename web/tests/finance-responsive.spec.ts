@@ -45,10 +45,14 @@ const forecast = (name: string) => ({
   ],
 });
 
-async function mockApi(page: Page, authenticated = true) {
+async function mockApi(page: Page, authenticated = true, failedPath?: string) {
   if (authenticated) await page.addInitScript(() => sessionStorage.setItem("finance_session", "test-access"));
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (failedPath && path.endsWith(failedPath)) {
+      await route.fulfill({ status: 500, contentType: "text/plain", body: "Internal Server Error" });
+      return;
+    }
     const json = path.endsWith("/auth/bootstrap") ? { access_token: "test-access", refresh_token: "test-refresh", expires_in: 900, session_id: "session-1" }
       : path.endsWith("/accounts") ? [account]
       : path.endsWith("/transactions") ? [transaction]
@@ -61,6 +65,17 @@ async function mockApi(page: Page, authenticated = true) {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(json) });
   });
 }
+
+test("one failed endpoint does not hide healthy PostgreSQL-backed sections", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page, true, "/transactions");
+  await page.goto("/");
+
+  await expect(page.getByText("PostgreSQL local")).toBeVisible();
+  await expect(page.getByText("Datos parcialmente disponibles")).toBeVisible();
+  await expect(page.getByText(/No se pudo actualizar: Movimientos/)).toBeVisible();
+  await expect(page.locator("strong").filter({ hasText: /^Débito$/ })).toBeVisible();
+});
 
 test("master token bootstrap works when randomUUID is unavailable on LAN HTTP", async ({ page }) => {
   await page.addInitScript(() => {
