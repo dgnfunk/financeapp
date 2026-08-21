@@ -54,6 +54,7 @@ import { BottomSheet, KeyboardTextarea, MobileScroll, useKeyboard } from "./mobi
 import { financeApi, useFinance } from "./FinanceContext";
 import type { Account, AuditItem, Budget, CashFlowPoint, FinanceState, Forecast, Scenario } from "./api";
 import { saveEncryptedDraft } from "./offlineDrafts";
+import { createRequestId } from "./requestId";
 
 type TabId = "home" | "transactions" | "budget" | "forecast" | "chat";
 type CaptureState = "idle" | "saving" | "saved" | "offline" | "file-offline";
@@ -192,7 +193,7 @@ export default function Prototype() {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
-          "Idempotency-Key": crypto.randomUUID(),
+          "Idempotency-Key": createRequestId(),
           ...(!selectedFile ? { "Content-Type": "application/json" } : {}),
         },
         body,

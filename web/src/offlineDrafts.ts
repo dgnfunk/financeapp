@@ -1,4 +1,5 @@
 import { apiRequest } from "./api";
+import { createRequestId } from "./requestId";
 
 type EncryptedDraft = { id: string; iv: Uint8Array; payload: ArrayBuffer; createdAt: string };
 
@@ -28,7 +29,7 @@ export async function saveEncryptedDraft(text: string): Promise<void> {
   if (!existing) await requestValue(database.transaction("keys", "readwrite").objectStore("keys").put(key, "draft-key"));
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const payload = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(text));
-  await requestValue(database.transaction("drafts", "readwrite").objectStore("drafts").put({ id: crypto.randomUUID(), iv, payload, createdAt: new Date().toISOString() }));
+  await requestValue(database.transaction("drafts", "readwrite").objectStore("drafts").put({ id: createRequestId(), iv, payload, createdAt: new Date().toISOString() }));
   database.close();
 }
 

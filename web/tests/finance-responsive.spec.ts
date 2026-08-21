@@ -45,11 +45,12 @@ const forecast = (name: string) => ({
   ],
 });
 
-async function mockApi(page: Page) {
-  await page.addInitScript(() => sessionStorage.setItem("finance_session", "test-access"));
+async function mockApi(page: Page, authenticated = true) {
+  if (authenticated) await page.addInitScript(() => sessionStorage.setItem("finance_session", "test-access"));
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
-    const json = path.endsWith("/accounts") ? [account]
+    const json = path.endsWith("/auth/bootstrap") ? { access_token: "test-access", refresh_token: "test-refresh", expires_in: 900, session_id: "session-1" }
+      : path.endsWith("/accounts") ? [account]
       : path.endsWith("/transactions") ? [transaction]
       : path.endsWith("/budgets") ? [{ id: "b1", month: "2026-08-01", category: "Supermercado", limit_amount: "3000.00", rollover: true, used: "800.00", rollover_amount: "0.00", available: "2200.00", percent_used: "26.67", status: "healthy" }]
       : path.endsWith("/analytics/summary") ? { transaction_count: 1, account_count: 1, imports_to_review: 0, base_currency: "MXN", net_worth: "9200.00", income_month: "20000.00", expenses_month: "800.00", net_flow_month: "19200.00", savings_rate: "96.00", freshness: "2026-08-18T12:00:00Z" }
@@ -60,6 +61,25 @@ async function mockApi(page: Page) {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(json) });
   });
 }
+
+test("master token bootstrap works when randomUUID is unavailable on LAN HTTP", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(globalThis.crypto, "randomUUID", { value: undefined, configurable: true });
+  });
+  await mockApi(page, false);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+
+  await page.getByLabel("Nombre del dispositivo").fill("Laptop LAN");
+  await page.getByLabel("Token maestro").fill("test-master-token");
+  const bootstrapRequest = page.waitForRequest((request) => request.url().endsWith("/api/v1/auth/bootstrap"));
+  await page.getByRole("button", { name: "Continuar" }).click();
+
+  const request = await bootstrapRequest;
+  expect(request.headers()["idempotency-key"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem("finance_session"))).toBe("test-access");
+  await expect(page.getByText("PostgreSQL local")).toBeVisible();
+});
 
 for (const width of [390, 1024, 1440]) {
   test(`finance application renders real API state at ${width}px`, async ({ page }) => {
