@@ -64,6 +64,8 @@ install_node() {
   rm -f "/tmp/${archive}"
 }
 install_node
+/usr/local/bin/node --version
+env PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/npm --version
 
 if [[ "${ENABLE_TAILSCALE:-yes}" == "yes" ]]; then
   TAILSCALE_KEYRING_TMP="$(mktemp)"

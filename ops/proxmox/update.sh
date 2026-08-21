@@ -127,8 +127,13 @@ else
 fi
 
 echo "Building PWA"
-runuser -u financeapp -- env HOME=/opt/financeapp/shared npm --prefix "$RELEASE/web" ci --no-audit --no-fund
-runuser -u financeapp -- env HOME=/opt/financeapp/shared VITE_API_URL=/api/v1 npm --prefix "$RELEASE/web" run build
+NPM_PATH=/usr/local/bin/npm
+BUILD_PATH=/usr/local/bin:/usr/bin:/bin
+[[ -x "$NPM_PATH" ]] || { echo "npm is missing at ${NPM_PATH}" >&2; exit 1; }
+runuser -u financeapp -- env HOME=/opt/financeapp/shared PATH="$BUILD_PATH" \
+  "$NPM_PATH" --prefix "$RELEASE/web" ci --no-audit --no-fund
+runuser -u financeapp -- env HOME=/opt/financeapp/shared PATH="$BUILD_PATH" VITE_API_URL=/api/v1 \
+  "$NPM_PATH" --prefix "$RELEASE/web" run build
 
 BACKUP="${BACKUPS}/pre-update-$(date -u +%Y%m%dT%H%M%SZ)-${CURRENT_COMMIT:-initial}.dump"
 update_failed() {
